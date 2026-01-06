@@ -60,14 +60,8 @@ async def cleanup_session(sid: str, message: str | None = None):
         except Exception:
             pass
 
-        # Attempt to quit driver (may already be dead)
-        driver = s.get("driver")
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                # ignore errors from quit (session already gone)
-                pass
+        # NOTE: Do NOT quit driver - keep browser alive for next patient
+        # Browser manager handles the persistent browser instance
 
     finally:
         # Remove session entry from map
@@ -126,8 +120,15 @@ async def start_ddma_run(sid: str, data: dict, url: str):
             await cleanup_session(sid, s["message"])
             return {"status": "error", "message": s["message"]}
 
+        # Already logged in - session persisted from profile, skip to step1
+        if isinstance(login_result, str) and login_result == "ALREADY_LOGGED_IN":
+            print("[start_ddma_run] Session persisted - skipping OTP")
+            s["status"] = "running"
+            s["message"] = "Session persisted"
+            # Continue to step1 below
+
         # OTP required path
-        if isinstance(login_result, str) and login_result == "OTP_REQUIRED":
+        elif isinstance(login_result, str) and login_result == "OTP_REQUIRED":
             s["status"] = "waiting_for_otp"
             s["message"] = "OTP required for login"
             s["last_activity"] = time.time()
@@ -147,10 +148,20 @@ async def start_ddma_run(sid: str, data: dict, url: str):
                 await cleanup_session(sid)
                 return {"status": "error", "message": "OTP missing after event"}
 
-            # Submit OTP in the same Selenium window
+            # Submit OTP - check if it's in a popup window
             try:
                 driver = s["driver"]
                 wait = WebDriverWait(driver, 30)
+                
+                # Check if there's a popup window and switch to it
+                original_window = driver.current_window_handle
+                all_windows = driver.window_handles
+                if len(all_windows) > 1:
+                    for window in all_windows:
+                        if window != original_window:
+                            driver.switch_to.window(window)
+                            print(f"[OTP] Switched to popup window for OTP entry")
+                            break
 
                 otp_input = wait.until(
                     EC.presence_of_element_located(
@@ -169,6 +180,11 @@ async def start_ddma_run(sid: str, data: dict, url: str):
                     submit_btn.click()
                 except Exception:
                     otp_input.send_keys("\n")
+                
+                # Wait for verification and switch back to main window if needed
+                await asyncio.sleep(2)
+                if len(driver.window_handles) > 0:
+                    driver.switch_to.window(driver.window_handles[0])
 
                 s["status"] = "otp_submitted"
                 s["last_activity"] = time.time()

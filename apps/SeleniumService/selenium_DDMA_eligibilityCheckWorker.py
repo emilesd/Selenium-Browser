@@ -10,6 +10,8 @@ import time
 import os
 import base64
 
+from ddma_browser_manager import get_browser_manager
+
 class AutomationDeltaDentalMAEligibilityCheck:    
     def __init__(self, data):
         self.headless = False
@@ -24,31 +26,139 @@ class AutomationDeltaDentalMAEligibilityCheck:
         self.massddma_username = self.data.get("massddmaUsername", "")
         self.massddma_password = self.data.get("massddmaPassword", "")
 
-        self.download_dir = os.path.abspath("seleniumDownloads")
+        # Use browser manager's download dir
+        self.download_dir = get_browser_manager().download_dir
         os.makedirs(self.download_dir, exist_ok=True)
 
     def config_driver(self):
-        options = webdriver.ChromeOptions()
-        if self.headless:
-            options.add_argument("--headless")
-
-        # Add PDF download preferences
-        prefs = {
-            "download.default_directory": self.download_dir,
-            "plugins.always_open_pdf_externally": True,
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True
-        }
-        options.add_experimental_option("prefs", prefs)
-
-        s = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=s, options=options)
-        self.driver = driver
+        # Use persistent browser from manager (keeps device trust tokens)
+        self.driver = get_browser_manager().get_driver(self.headless)
 
     def login(self, url):
         wait = WebDriverWait(self.driver, 30)
         try:
+            # First check if we're already on a logged-in page (from previous run)
+            try:
+                current_url = self.driver.current_url
+                print(f"[login] Current URL: {current_url}")
+                
+                # Check if we're on any logged-in page (dashboard, member pages, etc.)
+                logged_in_patterns = ["member", "dashboard", "eligibility", "search", "patients"]
+                is_logged_in_url = any(pattern in current_url.lower() for pattern in logged_in_patterns)
+                
+                if is_logged_in_url and "onboarding" not in current_url.lower():
+                    print(f"[login] Already on logged-in page - skipping login entirely")
+                    # Navigate directly to member search if not already there
+                    if "member" not in current_url.lower():
+                        # Try to find a link to member search or just check for search input
+                        try:
+                            member_search = WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                            )
+                            print("[login] Found member search input - returning ALREADY_LOGGED_IN")
+                            return "ALREADY_LOGGED_IN"
+                        except TimeoutException:
+                            # Try navigating to members page
+                            members_url = "https://providers.deltadentalma.com/members"
+                            print(f"[login] Navigating to members page: {members_url}")
+                            self.driver.get(members_url)
+                            time.sleep(2)
+                    
+                    # Verify we have the member search input
+                    try:
+                        member_search = WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                        )
+                        print("[login] Member search found - ALREADY_LOGGED_IN")
+                        return "ALREADY_LOGGED_IN"
+                    except TimeoutException:
+                        print("[login] Could not find member search, will try login")
+            except Exception as e:
+                print(f"[login] Error checking current state: {e}")
+            
+            # Navigate to login URL
             self.driver.get(url)
+            time.sleep(2)  # Wait for page to load and any redirects
+            
+            # Check if we got redirected to member search (session still valid)
+            try:
+                current_url = self.driver.current_url
+                print(f"[login] URL after navigation: {current_url}")
+                
+                if "onboarding" not in current_url.lower():
+                    member_search = WebDriverWait(self.driver, 3).until(
+                        EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                    )
+                    if member_search:
+                        print("[login] Session valid - skipping login")
+                        return "ALREADY_LOGGED_IN"
+            except TimeoutException:
+                print("[login] Proceeding with login")
+            
+            # Dismiss any "Authentication flow continued in another tab" modal
+            modal_dismissed = False
+            try:
+                ok_button = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ok' or normalize-space(text())='OK']"))
+                )
+                ok_button.click()
+                print("[login] Dismissed authentication modal")
+                modal_dismissed = True
+                time.sleep(2)
+                
+                # Check if a popup window opened for authentication
+                all_windows = self.driver.window_handles
+                print(f"[login] Windows after modal dismiss: {len(all_windows)}")
+                
+                if len(all_windows) > 1:
+                    # Switch to the auth popup
+                    original_window = self.driver.current_window_handle
+                    for window in all_windows:
+                        if window != original_window:
+                            self.driver.switch_to.window(window)
+                            print(f"[login] Switched to auth popup window")
+                            break
+                    
+                    # Look for OTP input in the popup
+                    try:
+                        otp_candidate = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located(
+                                (By.XPATH, "//input[contains(@aria-lable,'Verification code') or contains(@placeholder,'Enter your verification code') or contains(@aria-label,'Verification code')]")
+                            )
+                        )
+                        if otp_candidate:
+                            print("[login] OTP input found in popup -> OTP_REQUIRED")
+                            return "OTP_REQUIRED"
+                    except TimeoutException:
+                        print("[login] No OTP in popup, checking main window")
+                        self.driver.switch_to.window(original_window)
+                        
+            except TimeoutException:
+                pass  # No modal present
+            
+            # If modal was dismissed but no popup, page might have changed - wait and check
+            if modal_dismissed:
+                time.sleep(2)
+                # Check if we're now on member search page (already authenticated)
+                try:
+                    member_search = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                    )
+                    if member_search:
+                        print("[login] Already authenticated after modal dismiss")
+                        return "ALREADY_LOGGED_IN"
+                except TimeoutException:
+                    pass
+            
+            # Try to fill login form
+            try:
+                email_field = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//input[@name='username' and @type='text']"))
+                )
+            except TimeoutException:
+                print("[login] Could not find login form - page may have changed")
+                return "ERROR: Login form not found"
+            
             email_field = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@name='username' and @type='text']")))
             email_field.clear()
             email_field.send_keys(self.massddma_username)
@@ -226,6 +336,15 @@ class AutomationDeltaDentalMAEligibilityCheck:
                 pass
 
             print("Screenshot saved at:", screenshot_path)
+            
+            # Close the browser window after screenshot (session preserved in profile)
+            try:
+                from ddma_browser_manager import get_browser_manager
+                get_browser_manager().quit_driver()
+                print("[step2] Browser closed - session preserved in profile")
+            except Exception as e:
+                print(f"[step2] Error closing browser: {e}")
+            
             output = {
                     "status": "success",
                     "eligibility": eligibilityText,
@@ -254,14 +373,7 @@ class AutomationDeltaDentalMAEligibilityCheck:
                 print(f"[cleanup] unexpected error while cleaning downloads dir: {cleanup_exc}")
             return {"status": "error", "message": str(e)}
 
-        finally:
-            # Keep your existing quit behavior; if you want the driver to remain open for further
-            # actions, remove or change this.
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
+        # NOTE: Do NOT quit driver here - keep browser alive for next patient
 
     def main_workflow(self, url):
         try: 
@@ -289,10 +401,4 @@ class AutomationDeltaDentalMAEligibilityCheck:
                 "status": "error",
                 "message": e
             }
-        
-        finally:
-            try:
-                if self.driver:
-                    self.driver.quit()
-            except Exception:
-                pass
+        # NOTE: Do NOT quit driver - keep browser alive for next patient
