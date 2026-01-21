@@ -1,13 +1,14 @@
 """
-Minimal browser manager for DDMA - only handles persistent profile and keeping browser alive.
+Minimal browser manager for DentaQuest - only handles persistent profile and keeping browser alive.
 Clears session cookies on startup (after PC restart) to force fresh login.
 Tracks credentials to detect changes mid-session.
 """
 import os
-import glob
 import shutil
 import hashlib
 import threading
+import subprocess
+import time
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -17,9 +18,9 @@ if not os.environ.get("DISPLAY"):
     os.environ["DISPLAY"] = ":0"
 
 
-class DDMABrowserManager:
+class DentaQuestBrowserManager:
     """
-    Singleton that manages a persistent Chrome browser instance.
+    Singleton that manages a persistent Chrome browser instance for DentaQuest.
     - Uses --user-data-dir for persistent profile (device trust tokens)
     - Clears session cookies on startup (after PC restart)
     - Tracks credentials to detect changes mid-session
@@ -32,27 +33,27 @@ class DDMABrowserManager:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
                 cls._instance._driver = None
-                cls._instance.profile_dir = os.path.abspath("chrome_profile_ddma")
+                cls._instance.profile_dir = os.path.abspath("chrome_profile_dentaquest")
                 cls._instance.download_dir = os.path.abspath("seleniumDownloads")
                 cls._instance._credentials_file = os.path.join(cls._instance.profile_dir, ".last_credentials")
                 cls._instance._needs_session_clear = False  # Flag to clear session on next driver creation
                 os.makedirs(cls._instance.profile_dir, exist_ok=True)
                 os.makedirs(cls._instance.download_dir, exist_ok=True)
         return cls._instance
-    
+
     def clear_session_on_startup(self):
         """
         Clear session cookies from Chrome profile on startup.
         This forces a fresh login after PC restart.
         Preserves device trust tokens (LocalStorage, IndexedDB) to avoid OTPs.
         """
-        print("[DDMA BrowserManager] Clearing session on startup...")
+        print("[DentaQuest BrowserManager] Clearing session on startup...")
         
         try:
             # Clear the credentials tracking file
             if os.path.exists(self._credentials_file):
                 os.remove(self._credentials_file)
-                print("[DDMA BrowserManager] Cleared credentials tracking file")
+                print("[DentaQuest BrowserManager] Cleared credentials tracking file")
             
             # Clear session-related files from Chrome profile
             # These are the files that store login session cookies
@@ -70,9 +71,9 @@ class DDMABrowserManager:
                 if os.path.exists(filepath):
                     try:
                         os.remove(filepath)
-                        print(f"[DDMA BrowserManager] Removed {filename}")
+                        print(f"[DentaQuest BrowserManager] Removed {filename}")
                     except Exception as e:
-                        print(f"[DDMA BrowserManager] Could not remove {filename}: {e}")
+                        print(f"[DentaQuest BrowserManager] Could not remove {filename}: {e}")
             
             # Also try root level (some Chrome versions)
             for filename in session_files:
@@ -80,45 +81,45 @@ class DDMABrowserManager:
                 if os.path.exists(filepath):
                     try:
                         os.remove(filepath)
-                        print(f"[DDMA BrowserManager] Removed root {filename}")
+                        print(f"[DentaQuest BrowserManager] Removed root {filename}")
                     except Exception as e:
-                        print(f"[DDMA BrowserManager] Could not remove root {filename}: {e}")
+                        print(f"[DentaQuest BrowserManager] Could not remove root {filename}: {e}")
             
             # Clear Session Storage (contains login state)
             session_storage_dir = os.path.join(self.profile_dir, "Default", "Session Storage")
             if os.path.exists(session_storage_dir):
                 try:
                     shutil.rmtree(session_storage_dir)
-                    print("[DDMA BrowserManager] Cleared Session Storage")
+                    print("[DentaQuest BrowserManager] Cleared Session Storage")
                 except Exception as e:
-                    print(f"[DDMA BrowserManager] Could not clear Session Storage: {e}")
+                    print(f"[DentaQuest BrowserManager] Could not clear Session Storage: {e}")
             
             # Clear Local Storage (may contain auth tokens)
             local_storage_dir = os.path.join(self.profile_dir, "Default", "Local Storage")
             if os.path.exists(local_storage_dir):
                 try:
                     shutil.rmtree(local_storage_dir)
-                    print("[DDMA BrowserManager] Cleared Local Storage")
+                    print("[DentaQuest BrowserManager] Cleared Local Storage")
                 except Exception as e:
-                    print(f"[DDMA BrowserManager] Could not clear Local Storage: {e}")
+                    print(f"[DentaQuest BrowserManager] Could not clear Local Storage: {e}")
             
             # Clear IndexedDB (may contain auth tokens)
             indexeddb_dir = os.path.join(self.profile_dir, "Default", "IndexedDB")
             if os.path.exists(indexeddb_dir):
                 try:
                     shutil.rmtree(indexeddb_dir)
-                    print("[DDMA BrowserManager] Cleared IndexedDB")
+                    print("[DentaQuest BrowserManager] Cleared IndexedDB")
                 except Exception as e:
-                    print(f"[DDMA BrowserManager] Could not clear IndexedDB: {e}")
+                    print(f"[DentaQuest BrowserManager] Could not clear IndexedDB: {e}")
             
             # Set flag to clear session via JavaScript after browser opens
             self._needs_session_clear = True
             
-            print("[DDMA BrowserManager] Session cleared - will require fresh login")
+            print("[DentaQuest BrowserManager] Session cleared - will require fresh login")
             
         except Exception as e:
-            print(f"[DDMA BrowserManager] Error clearing session: {e}")
-    
+            print(f"[DentaQuest BrowserManager] Error clearing session: {e}")
+
     def _hash_credentials(self, username: str) -> str:
         """Create a hash of the username to track credential changes."""
         return hashlib.sha256(username.encode()).hexdigest()[:16]
@@ -140,7 +141,7 @@ class DDMABrowserManager:
             with open(self._credentials_file, 'w') as f:
                 f.write(cred_hash)
         except Exception as e:
-            print(f"[DDMA BrowserManager] Failed to save credentials hash: {e}")
+            print(f"[DentaQuest BrowserManager] Failed to save credentials hash: {e}")
     
     def credentials_changed(self, username: str) -> bool:
         """Check if the credentials have changed since last login."""
@@ -150,7 +151,7 @@ class DDMABrowserManager:
         current_hash = self._hash_credentials(username)
         changed = last_hash != current_hash
         if changed:
-            print(f"[DDMA BrowserManager] Credentials changed - logout required")
+            print(f"[DentaQuest BrowserManager] Credentials changed - logout required")
         return changed
     
     def clear_credentials_hash(self):
@@ -159,12 +160,10 @@ class DDMABrowserManager:
             if os.path.exists(self._credentials_file):
                 os.remove(self._credentials_file)
         except Exception as e:
-            print(f"[DDMA BrowserManager] Failed to clear credentials hash: {e}")
+            print(f"[DentaQuest BrowserManager] Failed to clear credentials hash: {e}")
 
     def _kill_existing_chrome_for_profile(self):
-        """Kill any existing Chrome processes using this profile and clean up locks."""
-        import subprocess
-        import time as time_module
+        """Kill any existing Chrome processes using this profile."""
         try:
             # Find and kill Chrome processes using this profile
             result = subprocess.run(
@@ -178,32 +177,31 @@ class DDMABrowserManager:
                         subprocess.run(["kill", "-9", pid], check=False)
                     except:
                         pass
-                time_module.sleep(1)
-        except Exception:
+                time.sleep(1)
+        except Exception as e:
             pass
         
-        # Remove lock files if they exist
-        for lock_file in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
-            lock_path = os.path.join(self.profile_dir, lock_file)
-            try:
-                if os.path.islink(lock_path) or os.path.exists(lock_path):
-                    os.remove(lock_path)
-            except:
-                pass
+        # Remove SingletonLock if exists
+        lock_file = os.path.join(self.profile_dir, "SingletonLock")
+        try:
+            if os.path.islink(lock_file) or os.path.exists(lock_file):
+                os.remove(lock_file)
+        except:
+            pass
 
     def get_driver(self, headless=False):
         """Get or create the persistent browser instance."""
         with self._lock:
             if self._driver is None:
-                print("[DDMA BrowserManager] Driver is None, creating new driver")
+                print("[DentaQuest BrowserManager] Driver is None, creating new driver")
                 self._kill_existing_chrome_for_profile()
                 self._create_driver(headless)
             elif not self._is_alive():
-                print("[DDMA BrowserManager] Driver not alive, recreating")
+                print("[DentaQuest BrowserManager] Driver not alive, recreating")
                 self._kill_existing_chrome_for_profile()
                 self._create_driver(headless)
             else:
-                print("[DDMA BrowserManager] Reusing existing driver")
+                print("[DentaQuest BrowserManager] Reusing existing driver")
             return self._driver
 
     def _is_alive(self):
@@ -212,10 +210,8 @@ class DDMABrowserManager:
             if self._driver is None:
                 return False
             url = self._driver.current_url
-            print(f"[DDMA BrowserManager] Driver alive, current URL: {url[:50]}...")
             return True
         except Exception as e:
-            print(f"[DDMA BrowserManager] Driver not alive: {e}")
             return False
 
     def _create_driver(self, headless=False):
@@ -225,6 +221,8 @@ class DDMABrowserManager:
                 self._driver.quit()
             except:
                 pass
+            self._driver = None
+            time.sleep(1)
 
         options = webdriver.ChromeOptions()
         if headless:
@@ -259,6 +257,8 @@ class DDMABrowserManager:
                 except:
                     pass
                 self._driver = None
+            # Also clean up any orphaned processes
+            self._kill_existing_chrome_for_profile()
 
 
 # Singleton accessor
@@ -267,11 +267,11 @@ _manager = None
 def get_browser_manager():
     global _manager
     if _manager is None:
-        _manager = DDMABrowserManager()
+        _manager = DentaQuestBrowserManager()
     return _manager
 
 
-def clear_ddma_session_on_startup():
+def clear_dentaquest_session_on_startup():
     """Called by agent.py on startup to clear session."""
     manager = get_browser_manager()
     manager.clear_session_on_startup()

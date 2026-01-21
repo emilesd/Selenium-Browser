@@ -22,10 +22,10 @@ export const insuranceIdSchema = z.preprocess(
     }
     return val;
   },
-  // After preprocess, require digits-only string (or optional nullable)
+  // After preprocess, allow alphanumeric insurance IDs (some providers like DentaQuest use letter prefixes)
   z
     .string()
-    .regex(/^\d+$/, { message: "Insurance ID must contain only digits" })
+    .regex(/^[A-Za-z0-9]+$/, { message: "Insurance ID must contain only letters and digits" })
     .min(1)
     .max(32)
     .optional()

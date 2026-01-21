@@ -28,6 +28,7 @@ import { QK_PATIENTS_BASE } from "@/components/patients/patient-table";
 import { PdfPreviewModal } from "@/components/insurance-status/pdf-preview-modal";
 import { useLocation } from "wouter";
 import { DdmaEligibilityButton } from "@/components/insurance-status/ddma-buton-modal";
+import { DentaQuestEligibilityButton } from "@/components/insurance-status/dentaquest-button-modal";
 
 export default function InsuranceStatusPage() {
   const { user } = useAuth();
@@ -616,14 +617,20 @@ export default function InsuranceStatusPage() {
 
               {/* Row 2 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  disabled={isFormIncomplete}
-                >
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                  Tufts SCO/SWH/Navi/Mass Gen
-                </Button>
+                <DentaQuestEligibilityButton
+                  memberId={memberId}
+                  dateOfBirth={dateOfBirth}
+                  firstName={firstName}
+                  lastName={lastName}
+                  isFormIncomplete={isFormIncomplete}
+                  onPdfReady={(pdfId, fallbackFilename) => {
+                    setPreviewPdfId(pdfId);
+                    setPreviewFallbackFilename(
+                      fallbackFilename ?? `eligibility_dentaquest_${memberId}.pdf`
+                    );
+                    setPreviewOpen(true);
+                  }}
+                />
 
                 <Button
                   className="w-full"

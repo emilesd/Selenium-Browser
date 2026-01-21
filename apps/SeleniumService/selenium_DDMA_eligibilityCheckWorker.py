@@ -34,9 +34,63 @@ class AutomationDeltaDentalMAEligibilityCheck:
         # Use persistent browser from manager (keeps device trust tokens)
         self.driver = get_browser_manager().get_driver(self.headless)
 
+    def _force_logout(self):
+        """Force logout by clearing cookies for Delta Dental domain."""
+        try:
+            print("[DDMA login] Forcing logout due to credential change...")
+            browser_manager = get_browser_manager()
+            
+            # First try to click logout button if visible
+            try:
+                self.driver.get("https://providers.deltadentalma.com/")
+                time.sleep(2)
+                
+                logout_selectors = [
+                    "//button[contains(text(), 'Log out') or contains(text(), 'Logout') or contains(text(), 'Sign out')]",
+                    "//a[contains(text(), 'Log out') or contains(text(), 'Logout') or contains(text(), 'Sign out')]",
+                    "//button[@aria-label='Log out' or @aria-label='Logout' or @aria-label='Sign out']",
+                    "//*[contains(@class, 'logout') or contains(@class, 'signout')]"
+                ]
+                
+                for selector in logout_selectors:
+                    try:
+                        logout_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                        logout_btn.click()
+                        print("[DDMA login] Clicked logout button")
+                        time.sleep(2)
+                        break
+                    except TimeoutException:
+                        continue
+            except Exception as e:
+                print(f"[DDMA login] Could not click logout button: {e}")
+            
+            # Clear cookies as backup
+            try:
+                self.driver.delete_all_cookies()
+                print("[DDMA login] Cleared all cookies")
+            except Exception as e:
+                print(f"[DDMA login] Error clearing cookies: {e}")
+            
+            browser_manager.clear_credentials_hash()
+            print("[DDMA login] Logout complete")
+            return True
+        except Exception as e:
+            print(f"[DDMA login] Error during forced logout: {e}")
+            return False
+
     def login(self, url):
         wait = WebDriverWait(self.driver, 30)
+        browser_manager = get_browser_manager()
+        
         try:
+            # Check if credentials have changed - if so, force logout first
+            if self.massddma_username and browser_manager.credentials_changed(self.massddma_username):
+                self._force_logout()
+                self.driver.get(url)
+                time.sleep(2)
+            
             # First check if we're already on a logged-in page (from previous run)
             try:
                 current_url = self.driver.current_url
@@ -178,6 +232,10 @@ class AutomationDeltaDentalMAEligibilityCheck:
 
             login_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit' and @aria-label='Sign in']")))
             login_button.click()
+            
+            # Save credentials hash after login attempt
+            if self.massddma_username:
+                browser_manager.save_credentials_hash(self.massddma_username)
 
             # OTP detection
             try:
