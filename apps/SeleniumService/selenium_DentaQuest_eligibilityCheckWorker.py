@@ -198,25 +198,48 @@ class AutomationDentaQuestEligibilityCheck:
                     if self.dentaquest_username:
                         browser_manager.save_credentials_hash(self.dentaquest_username)
                     
-                    time.sleep(5)
-                    
-                    # Check for OTP after login
+                    # OTP detection - wait up to 30 seconds for OTP input to appear (like Delta MA)
+                    # Use comprehensive XPath to detect various OTP input patterns
                     try:
-                        otp_input = WebDriverWait(self.driver, 10).until(
-                            EC.presence_of_element_located((By.XPATH, "//input[@type='tel' or contains(@placeholder,'code') or contains(@aria-label,'Verification')]"))
+                        otp_input = WebDriverWait(self.driver, 30).until(
+                            EC.presence_of_element_located((By.XPATH, 
+                                "//input[@type='tel' or contains(@placeholder,'code') or contains(@placeholder,'Code') or "
+                                "contains(@aria-label,'Verification') or contains(@aria-label,'verification') or "
+                                "contains(@aria-label,'Code') or contains(@aria-label,'code') or "
+                                "contains(@placeholder,'verification') or contains(@placeholder,'Verification') or "
+                                "contains(@name,'otp') or contains(@name,'code') or contains(@id,'otp') or contains(@id,'code')]"
+                            ))
                         )
+                        print("[DentaQuest login] OTP input detected -> OTP_REQUIRED")
                         return "OTP_REQUIRED"
                     except TimeoutException:
-                        pass
+                        print("[DentaQuest login] No OTP input detected in 30 seconds")
                     
-                    # Check if login succeeded
-                    if "dashboard" in self.driver.current_url.lower():
-                        return "SUCCESS"
+                    # Check if login succeeded (redirected to dashboard or member search)
+                    current_url_after_login = self.driver.current_url.lower()
+                    print(f"[DentaQuest login] After login URL: {current_url_after_login}")
+                    
+                    if "dashboard" in current_url_after_login or "member" in current_url_after_login:
+                        # Verify by checking for member search input
+                        try:
+                            member_search = WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                            )
+                            print("[DentaQuest login] Login successful - now on member search page")
+                            return "SUCCESS"
+                        except TimeoutException:
+                            pass
+                    
+                    # Still on login page - login failed
+                    if "onboarding" in current_url_after_login or "login" in current_url_after_login:
+                        print("[DentaQuest login] Login failed - still on login page")
+                        return "ERROR: Login failed - check credentials"
                     
                 except TimeoutException:
                     print("[DentaQuest login] Login form elements not found")
                     return "ERROR: Login form not found"
             
+            # If we got here without going through login, we're already logged in
             return "SUCCESS"
                 
         except Exception as e:
@@ -335,45 +358,184 @@ class AutomationDentaQuestEligibilityCheck:
 
     
     def step2(self):
-        """Get eligibility status and capture screenshot"""
+        """Get eligibility status, navigate to detail page, and capture PDF"""
         wait = WebDriverWait(self.driver, 90)
 
         try:
             print("[DentaQuest step2] Starting eligibility capture")
             
-            # Wait for results to load
-            time.sleep(3)
-            
-            # Try to find eligibility status from the results
-            eligibilityText = "unknown"
+            # Wait for results table to load (use explicit wait instead of fixed sleep)
             try:
-                # Look for a link or element with eligibility status
-                status_elem = wait.until(EC.presence_of_element_located((
-                    By.XPATH,
-                    "//a[contains(@href,'eligibility')] | //*[contains(@class,'status')] | //*[contains(text(),'Active') or contains(text(),'Inactive') or contains(text(),'Eligible')]"
-                )))
-                eligibilityText = status_elem.text.strip().lower()
-                print(f"[DentaQuest step2] Found status element: {eligibilityText}")
-                
-                # Normalize status
-                if "active" in eligibilityText or "eligible" in eligibilityText:
-                    eligibilityText = "active"
-                elif "inactive" in eligibilityText or "ineligible" in eligibilityText:
-                    eligibilityText = "inactive"
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//tbody//tr"))
+                )
             except TimeoutException:
-                print("[DentaQuest step2] Could not find specific eligibility status")
+                print("[DentaQuest step2] Warning: Results table not found within timeout")
+            
+            # 1) Find and extract eligibility status from search results
+            eligibilityText = "unknown"
+            status_selectors = [
+                "(//tbody//tr)[1]//a[contains(@href, 'eligibility')]",
+                "//a[contains(@href,'eligibility')]",
+                "//*[contains(@class,'status')]",
+                "//*[contains(text(),'Active') or contains(text(),'Inactive') or contains(text(),'Eligible')]"
+            ]
+            
+            for selector in status_selectors:
+                try:
+                    status_elem = self.driver.find_element(By.XPATH, selector)
+                    status_text = status_elem.text.strip().lower()
+                    if status_text:
+                        print(f"[DentaQuest step2] Found status with selector '{selector}': {status_text}")
+                        if "active" in status_text or "eligible" in status_text:
+                            eligibilityText = "active"
+                            break
+                        elif "inactive" in status_text or "ineligible" in status_text:
+                            eligibilityText = "inactive"
+                            break
+                except:
+                    continue
+            
+            print(f"[DentaQuest step2] Final eligibility status: {eligibilityText}")
 
-            # Try to find patient name
+            # 2) Find the patient detail link and navigate DIRECTLY to it
+            print("[DentaQuest step2] Looking for patient detail link...")
+            patient_name_clicked = False
             patientName = ""
+            detail_url = None
+            current_url_before = self.driver.current_url
+            print(f"[DentaQuest step2] Current URL before: {current_url_before}")
+            
+            # Find all links in first row and log them
             try:
-                # Look for the patient name in the results
-                name_elem = self.driver.find_element(By.XPATH, "//h1 | //div[contains(@class,'name')] | //*[contains(@class,'member-name') or contains(@class,'patient-name')]")
-                patientName = name_elem.text.strip()
-                print(f"[DentaQuest step2] Found patient name: {patientName}")
-            except:
-                pass
+                all_links = self.driver.find_elements(By.XPATH, "(//tbody//tr)[1]//a")
+                print(f"[DentaQuest step2] Found {len(all_links)} links in first row:")
+                for i, link in enumerate(all_links):
+                    href = link.get_attribute("href") or "no-href"
+                    text = link.text.strip() or "(empty text)"
+                    print(f"  Link {i}: href={href[:80]}..., text={text}")
+            except Exception as e:
+                print(f"[DentaQuest step2] Error listing links: {e}")
+            
+            # Find the patient detail link
+            patient_link_selectors = [
+                "(//table//tbody//tr)[1]//td[1]//a",  # First column link
+                "(//tbody//tr)[1]//a[contains(@href, 'member-details')]",  # member-details link
+                "(//tbody//tr)[1]//a[contains(@href, 'member')]",  # Any member link
+            ]
+            
+            for selector in patient_link_selectors:
+                try:
+                    patient_link = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                    patientName = patient_link.text.strip()
+                    href = patient_link.get_attribute("href")
+                    print(f"[DentaQuest step2] Found patient link: text='{patientName}', href={href}")
+                    
+                    if href and ("member-details" in href or "member" in href):
+                        detail_url = href
+                        patient_name_clicked = True
+                        print(f"[DentaQuest step2] Will navigate directly to: {detail_url}")
+                        break
+                except Exception as e:
+                    print(f"[DentaQuest step2] Selector '{selector}' failed: {e}")
+                    continue
+            
+            if not detail_url:
+                # Fallback: Try to find ANY link to member-details
+                try:
+                    all_links = self.driver.find_elements(By.XPATH, "//a[contains(@href, 'member')]")
+                    if all_links:
+                        detail_url = all_links[0].get_attribute("href")
+                        patient_name_clicked = True
+                        print(f"[DentaQuest step2] Found member link: {detail_url}")
+                except Exception as e:
+                    print(f"[DentaQuest step2] Could not find member link: {e}")
+            
+            # Navigate to detail page DIRECTLY
+            if patient_name_clicked and detail_url:
+                print(f"[DentaQuest step2] Navigating directly to detail page: {detail_url}")
+                self.driver.get(detail_url)
+                time.sleep(3)  # Wait for page to load
+                
+                current_url_after = self.driver.current_url
+                print(f"[DentaQuest step2] Current URL after navigation: {current_url_after}")
+                
+                if "member-details" in current_url_after or "member" in current_url_after:
+                    print("[DentaQuest step2] Successfully navigated to member details page!")
+                else:
+                    print(f"[DentaQuest step2] WARNING: Navigation might have redirected. Current URL: {current_url_after}")
+                
+                # Wait for page to be ready
+                try:
+                    WebDriverWait(self.driver, 30).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                except Exception:
+                    print("[DentaQuest step2] Warning: document.readyState did not become 'complete'")
+                
+                # Wait for member details content to load
+                print("[DentaQuest step2] Waiting for member details content to fully load...")
+                content_loaded = False
+                content_selectors = [
+                    "//div[contains(@class,'member') or contains(@class,'detail') or contains(@class,'patient')]",
+                    "//h1",
+                    "//h2",
+                    "//table",
+                    "//*[contains(text(),'Member ID') or contains(text(),'Name') or contains(text(),'Date of Birth')]",
+                ]
+                for selector in content_selectors:
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, selector))
+                        )
+                        content_loaded = True
+                        print(f"[DentaQuest step2] Content element found: {selector}")
+                        break
+                    except:
+                        continue
+                
+                if not content_loaded:
+                    print("[DentaQuest step2] Warning: Could not verify content loaded, waiting extra time...")
+                
+                # Additional wait for dynamic content
+                time.sleep(5)
+                
+                # Try to extract patient name from detailed page if not already found
+                if not patientName:
+                    detail_name_selectors = [
+                        "//h1",
+                        "//h2",
+                        "//*[contains(@class,'patient-name') or contains(@class,'member-name')]",
+                        "//div[contains(@class,'header')]//span",
+                    ]
+                    for selector in detail_name_selectors:
+                        try:
+                            name_elem = self.driver.find_element(By.XPATH, selector)
+                            name_text = name_elem.text.strip()
+                            if name_text and len(name_text) > 1:
+                                if not any(x in name_text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'date', 'print', 'member id']):
+                                    patientName = name_text
+                                    print(f"[DentaQuest step2] Found patient name on detail page: {patientName}")
+                                    break
+                        except:
+                            continue
+            else:
+                print("[DentaQuest step2] Warning: Could not find detail URL, capturing search results page")
+                # Still try to get patient name from search results
+                try:
+                    name_elem = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]//td[1]")
+                    patientName = name_elem.text.strip()
+                except:
+                    pass
 
-            # Wait for page to fully load
+            if not patientName:
+                print("[DentaQuest step2] Could not extract patient name")
+            else:
+                print(f"[DentaQuest step2] Patient name: {patientName}")
+
+            # Wait for page to fully load before generating PDF
             try:
                 WebDriverWait(self.driver, 30).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
@@ -383,41 +545,31 @@ class AutomationDentaQuestEligibilityCheck:
 
             time.sleep(1)
 
-            # Capture full page screenshot
-            print("[DentaQuest step2] Capturing screenshot")
-            total_width = int(self.driver.execute_script(
-                "return Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, document.documentElement.clientWidth);"
-            ))
-            total_height = int(self.driver.execute_script(
-                "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.documentElement.clientHeight);"
-            ))
-            dpr = float(self.driver.execute_script("return window.devicePixelRatio || 1;"))
+            # Generate PDF of the detailed patient page using Chrome DevTools Protocol
+            print("[DentaQuest step2] Generating PDF of patient detail page...")
+            
+            pdf_options = {
+                "landscape": False,
+                "displayHeaderFooter": False,
+                "printBackground": True,
+                "preferCSSPageSize": True,
+                "paperWidth": 8.5,  # Letter size in inches
+                "paperHeight": 11,
+                "marginTop": 0.4,
+                "marginBottom": 0.4,
+                "marginLeft": 0.4,
+                "marginRight": 0.4,
+                "scale": 0.9,  # Slightly scale down to fit content
+            }
+            
+            result = self.driver.execute_cdp_cmd("Page.printToPDF", pdf_options)
+            pdf_data = base64.b64decode(result.get('data', ''))
+            pdf_path = os.path.join(self.download_dir, f"dentaquest_eligibility_{self.memberId}_{int(time.time())}.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_data)
+            print(f"[DentaQuest step2] PDF saved: {pdf_path}")
 
-            self.driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {
-                "mobile": False,
-                "width": total_width,
-                "height": total_height,
-                "deviceScaleFactor": dpr,
-                "screenOrientation": {"angle": 0, "type": "portraitPrimary"}
-            })
-
-            time.sleep(0.2)
-
-            # Capture screenshot
-            result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "png", "fromSurface": True})
-            image_data = base64.b64decode(result.get('data', ''))
-            screenshot_path = os.path.join(self.download_dir, f"dentaquest_ss_{self.memberId}_{int(time.time())}.png")
-            with open(screenshot_path, "wb") as f:
-                f.write(image_data)
-            print(f"[DentaQuest step2] Screenshot saved: {screenshot_path}")
-
-            # Restore original metrics
-            try:
-                self.driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
-            except Exception:
-                pass
-
-            # Close the browser window after screenshot
+            # Close the browser window after PDF generation
             try:
                 from dentaquest_browser_manager import get_browser_manager
                 get_browser_manager().quit_driver()
@@ -428,7 +580,8 @@ class AutomationDentaQuestEligibilityCheck:
             output = {
                 "status": "success",
                 "eligibility": eligibilityText,
-                "ss_path": screenshot_path,
+                "ss_path": pdf_path,  # Keep key as ss_path for backward compatibility
+                "pdf_path": pdf_path,  # Also add explicit pdf_path
                 "patientName": patientName
             }
             print(f"[DentaQuest step2] Success: {output}")

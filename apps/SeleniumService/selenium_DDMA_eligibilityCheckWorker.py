@@ -237,7 +237,7 @@ class AutomationDeltaDentalMAEligibilityCheck:
             if self.massddma_username:
                 browser_manager.save_credentials_hash(self.massddma_username)
 
-            # OTP detection
+            # OTP detection - wait up to 30 seconds for OTP input to appear
             try:
                 otp_candidate = WebDriverWait(self.driver, 30).until(
                     EC.presence_of_element_located(
@@ -249,6 +249,36 @@ class AutomationDeltaDentalMAEligibilityCheck:
                     return "OTP_REQUIRED"
             except TimeoutException:
                 print("[login] No OTP input detected in allowed time.")
+                # Check if we're now on the member search page (login succeeded without OTP)
+                try:
+                    current_url = self.driver.current_url.lower()
+                    if "member" in current_url or "dashboard" in current_url:
+                        member_search = WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                        )
+                        print("[login] Login successful - now on member search page")
+                        return "SUCCESS"
+                except TimeoutException:
+                    pass
+                
+                # Check for error messages on page
+                try:
+                    error_elem = WebDriverWait(self.driver, 3).until(
+                        EC.presence_of_element_located((By.XPATH, "//*[contains(@class,'error') or contains(text(),'invalid') or contains(text(),'failed')]"))
+                    )
+                    print(f"[login] Login failed - error detected: {error_elem.text}")
+                    return f"ERROR:LOGIN FAILED: {error_elem.text}"
+                except TimeoutException:
+                    pass
+                
+                # If still on login page, login failed
+                if "onboarding" in self.driver.current_url.lower() or "login" in self.driver.current_url.lower():
+                    print("[login] Login failed - still on login page")
+                    return "ERROR:LOGIN FAILED: Still on login page"
+                
+                # Otherwise assume success (might be on an intermediate page)
+                print("[login] Assuming login succeeded (no errors detected)")
+                return "SUCCESS"
         except Exception as e:
             print("[login] Exception during login:", e)
             return f"ERROR:LOGIN FAILED: {e}"
@@ -329,73 +359,220 @@ class AutomationDeltaDentalMAEligibilityCheck:
         wait = WebDriverWait(self.driver, 90)
 
         try:
-            # 1) find the eligibility <a> inside the correct cell
-            status_link = wait.until(EC.presence_of_element_located((
-                By.XPATH,
-                "(//tbody//tr)[1]//a[contains(@href, 'member-eligibility-search')]"
-            )))
+            # Wait for results table to load (use explicit wait instead of fixed sleep)
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//tbody//tr"))
+                )
+            except TimeoutException:
+                print("[DDMA step2] Warning: Results table not found within timeout")
+            
+            # 1) Find and extract eligibility status from search results (use short timeout - not critical)
+            eligibilityText = "unknown"
+            try:
+                # Use short timeout (3s) since this is just for status extraction
+                short_wait = WebDriverWait(self.driver, 3)
+                status_link = short_wait.until(EC.presence_of_element_located((
+                    By.XPATH,
+                    "(//tbody//tr)[1]//a[contains(@href, 'member-eligibility-search')]"
+                )))
+                eligibilityText = status_link.text.strip().lower()
+                print(f"[DDMA step2] Found eligibility status: {eligibilityText}")
+            except Exception as e:
+                print(f"[DDMA step2] Eligibility link not found, trying alternative...")
+                try:
+                    alt_status = self.driver.find_element(By.XPATH, "//*[contains(text(),'Active') or contains(text(),'Inactive') or contains(text(),'Eligible')]")
+                    eligibilityText = alt_status.text.strip().lower()
+                    if "active" in eligibilityText or "eligible" in eligibilityText:
+                        eligibilityText = "active"
+                    elif "inactive" in eligibilityText:
+                        eligibilityText = "inactive"
+                    print(f"[DDMA step2] Found eligibility via alternative: {eligibilityText}")
+                except:
+                    pass
 
-            eligibilityText = status_link.text.strip().lower()
+            # 2) Click on patient name to navigate to detailed patient page
+            print("[DDMA step2] Clicking on patient name to open detailed page...")
+            patient_name_clicked = False
+            patientName = ""
+            
+            # First, let's print what we see on the page for debugging
+            current_url_before = self.driver.current_url
+            print(f"[DDMA step2] Current URL before click: {current_url_before}")
+            
+            # Try to find all links in the first row and print them for debugging
+            try:
+                all_links = self.driver.find_elements(By.XPATH, "(//tbody//tr)[1]//a")
+                print(f"[DDMA step2] Found {len(all_links)} links in first row:")
+                for i, link in enumerate(all_links):
+                    href = link.get_attribute("href") or "no-href"
+                    text = link.text.strip() or "(empty text)"
+                    print(f"  Link {i}: href={href[:80]}..., text={text}")
+            except Exception as e:
+                print(f"[DDMA step2] Error listing links: {e}")
+            
+            # Find the patient detail link and navigate DIRECTLY to it
+            detail_url = None
+            patient_link_selectors = [
+                "(//table//tbody//tr)[1]//td[1]//a",  # First column link
+                "(//tbody//tr)[1]//a[contains(@href, 'member-details')]",  # member-details link
+                "(//tbody//tr)[1]//a[contains(@href, 'member')]",  # Any member link
+            ]
+            
+            for selector in patient_link_selectors:
+                try:
+                    patient_link = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                    patientName = patient_link.text.strip()
+                    href = patient_link.get_attribute("href")
+                    print(f"[DDMA step2] Found patient link: text='{patientName}', href={href}")
+                    
+                    if href and "member-details" in href:
+                        detail_url = href
+                        patient_name_clicked = True
+                        print(f"[DDMA step2] Will navigate directly to: {detail_url}")
+                        break
+                except Exception as e:
+                    print(f"[DDMA step2] Selector '{selector}' failed: {e}")
+                    continue
+            
+            if not detail_url:
+                # Fallback: Try to find ANY link to member-details
+                try:
+                    all_links = self.driver.find_elements(By.XPATH, "//a[contains(@href, 'member-details')]")
+                    if all_links:
+                        detail_url = all_links[0].get_attribute("href")
+                        patient_name_clicked = True
+                        print(f"[DDMA step2] Found member-details link: {detail_url}")
+                except Exception as e:
+                    print(f"[DDMA step2] Could not find member-details link: {e}")
+            
+            # Navigate to detail page DIRECTLY instead of clicking (which may open new tab/fail)
+            if patient_name_clicked and detail_url:
+                print(f"[DDMA step2] Navigating directly to detail page: {detail_url}")
+                self.driver.get(detail_url)
+                time.sleep(3)  # Wait for page to load
+                
+                current_url_after = self.driver.current_url
+                print(f"[DDMA step2] Current URL after navigation: {current_url_after}")
+                
+                if "member-details" in current_url_after:
+                    print("[DDMA step2] Successfully navigated to member details page!")
+                else:
+                    print(f"[DDMA step2] WARNING: Navigation might have redirected. Current URL: {current_url_after}")
+                
+                # Wait for page to be ready
+                try:
+                    WebDriverWait(self.driver, 30).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                except Exception:
+                    print("[DDMA step2] Warning: document.readyState did not become 'complete'")
+                
+                # Wait for member details content to load (wait for specific elements)
+                print("[DDMA step2] Waiting for member details content to fully load...")
+                content_loaded = False
+                content_selectors = [
+                    "//div[contains(@class,'member') or contains(@class,'detail') or contains(@class,'patient')]",
+                    "//h1",
+                    "//h2",
+                    "//table",
+                    "//*[contains(text(),'Member ID') or contains(text(),'Name') or contains(text(),'Date of Birth')]",
+                ]
+                for selector in content_selectors:
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, selector))
+                        )
+                        content_loaded = True
+                        print(f"[DDMA step2] Content element found: {selector}")
+                        break
+                    except:
+                        continue
+                
+                if not content_loaded:
+                    print("[DDMA step2] Warning: Could not verify content loaded, waiting extra time...")
+                
+                # Additional wait for dynamic content and animations
+                time.sleep(5)  # Increased from 2 to 5 seconds
+                
+                # Print page title for debugging
+                try:
+                    page_title = self.driver.title
+                    print(f"[DDMA step2] Page title: {page_title}")
+                except:
+                    pass
+                
+                # Try to extract patient name from detailed page if not already found
+                if not patientName:
+                    detail_name_selectors = [
+                        "//h1",
+                        "//h2",
+                        "//*[contains(@class,'patient-name') or contains(@class,'member-name')]",
+                        "//div[contains(@class,'header')]//span",
+                    ]
+                    for selector in detail_name_selectors:
+                        try:
+                            name_elem = self.driver.find_element(By.XPATH, selector)
+                            name_text = name_elem.text.strip()
+                            if name_text and len(name_text) > 1:
+                                if not any(x in name_text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'date', 'print']):
+                                    patientName = name_text
+                                    print(f"[DDMA step2] Found patient name on detail page: {patientName}")
+                                    break
+                        except:
+                            continue
+            else:
+                print("[DDMA step2] Warning: Could not click on patient, capturing search results page")
+                # Still try to get patient name from search results
+                try:
+                    name_elem = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]//td[1]")
+                    patientName = name_elem.text.strip()
+                except:
+                    pass
 
-            # 2) finding patient name. 
-            patient_name_div = wait.until(EC.presence_of_element_located((
-                By.XPATH,
-                '//div[@class="flex flex-row w-full items-center"]'
-            )))
+            if not patientName:
+                print("[DDMA step2] Could not extract patient name")
+            else:
+                print(f"[DDMA step2] Patient name: {patientName}")
 
-            patientName = patient_name_div.text.strip().lower()
-
-
-
+            # Wait for page to fully load before generating PDF
             try:
                 WebDriverWait(self.driver, 30).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
                 )
             except Exception:
-                print("Warning: document.readyState did not become 'complete' within timeout")
-
-            # Give some time for lazy content to finish rendering (adjust if needed)
-            time.sleep(0.6)
-
-            # Get total page size and DPR
-            total_width = int(self.driver.execute_script(
-                "return Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, document.documentElement.clientWidth);"
-            ))
-            total_height = int(self.driver.execute_script(
-                "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.documentElement.clientHeight);"
-            ))
-            dpr = float(self.driver.execute_script("return window.devicePixelRatio || 1;"))
-
-            # Set device metrics to the full page size so Page.captureScreenshot captures everything
-            # Note: Some pages are extremely tall; if you hit memory limits, you can capture in chunks.
-            self.driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {
-                "mobile": False,
-                "width": total_width,
-                "height": total_height,
-                "deviceScaleFactor": dpr,
-                "screenOrientation": {"angle": 0, "type": "portraitPrimary"}
-            })
-
-            # Small pause for layout to settle after emulation change
-            time.sleep(0.15)
-
-            # Capture screenshot (base64 PNG)
-            result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "png", "fromSurface": True})
-            image_data = base64.b64decode(result.get('data', ''))
-            screenshot_path = os.path.join(self.download_dir, f"ss_{self.memberId}.png")
-            with open(screenshot_path, "wb") as f:
-                f.write(image_data)
-
-            # Restore original metrics to avoid affecting further interactions
-            try:
-                self.driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
-            except Exception:
-                # non-fatal: continue
                 pass
-
-            print("Screenshot saved at:", screenshot_path)
             
-            # Close the browser window after screenshot (session preserved in profile)
+            time.sleep(1)
+
+            # Generate PDF of the detailed patient page using Chrome DevTools Protocol
+            print("[DDMA step2] Generating PDF of patient detail page...")
+            
+            pdf_options = {
+                "landscape": False,
+                "displayHeaderFooter": False,
+                "printBackground": True,
+                "preferCSSPageSize": True,
+                "paperWidth": 8.5,  # Letter size in inches
+                "paperHeight": 11,
+                "marginTop": 0.4,
+                "marginBottom": 0.4,
+                "marginLeft": 0.4,
+                "marginRight": 0.4,
+                "scale": 0.9,  # Slightly scale down to fit content
+            }
+            
+            result = self.driver.execute_cdp_cmd("Page.printToPDF", pdf_options)
+            pdf_data = base64.b64decode(result.get('data', ''))
+            pdf_path = os.path.join(self.download_dir, f"eligibility_{self.memberId}.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_data)
+
+            print(f"[DDMA step2] PDF saved at: {pdf_path}")
+            
+            # Close the browser window after PDF generation (session preserved in profile)
             try:
                 from ddma_browser_manager import get_browser_manager
                 get_browser_manager().quit_driver()
@@ -406,8 +583,9 @@ class AutomationDeltaDentalMAEligibilityCheck:
             output = {
                     "status": "success",
                     "eligibility": eligibilityText,
-                    "ss_path": screenshot_path,
-                    "patientName":patientName
+                    "ss_path": pdf_path,  # Keep key as ss_path for backward compatibility
+                    "pdf_path": pdf_path,  # Also add explicit pdf_path
+                    "patientName": patientName
                 }
             return output
         except Exception as e:

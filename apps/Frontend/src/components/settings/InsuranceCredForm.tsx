@@ -14,6 +14,13 @@ type CredentialFormProps = {
   };
 };
 
+// Available site keys - must match exactly what the automation buttons expect
+const SITE_KEY_OPTIONS = [
+  { value: "MH", label: "MassHealth" },
+  { value: "DDMA", label: "Delta Dental MA" },
+  { value: "DENTAQUEST", label: "Tufts SCO / DentaQuest" },
+];
+
 export function CredentialForm({ onClose, userId, defaultValues }: CredentialFormProps) {
   const [siteKey, setSiteKey] = useState(defaultValues?.siteKey || "");
   const [username, setUsername] = useState(defaultValues?.username || "");
@@ -91,14 +98,19 @@ export function CredentialForm({ onClose, userId, defaultValues }: CredentialFor
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium">Site Key</label>
-            <input
-              type="text"
+            <label className="block text-sm font-medium">Insurance Provider</label>
+            <select
               value={siteKey}
               onChange={(e) => setSiteKey(e.target.value)}
-              className="mt-1 p-2 border rounded w-full"
-              placeholder="e.g., MH, Delta MA, (keep the site key exact same)"
-            />
+              className="mt-1 p-2 border rounded w-full bg-white"
+            >
+              <option value="">Select a provider...</option>
+              {SITE_KEY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium">Username</label>

@@ -5,7 +5,7 @@ from typing import Dict, Any
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import WebDriverException, TimeoutException
 
 from selenium_DDMA_eligibilityCheckWorker import AutomationDeltaDentalMAEligibilityCheck
 
@@ -127,80 +127,104 @@ async def start_ddma_run(sid: str, data: dict, url: str):
             s["message"] = "Session persisted"
             # Continue to step1 below
 
-        # OTP required path
+        # OTP required path - POLL THE BROWSER to detect when user enters OTP
         elif isinstance(login_result, str) and login_result == "OTP_REQUIRED":
             s["status"] = "waiting_for_otp"
-            s["message"] = "OTP required for login"
+            s["message"] = "OTP required for login - please enter OTP in browser"
             s["last_activity"] = time.time()
-
-            try:
-                await asyncio.wait_for(s["otp_event"].wait(), timeout=SESSION_OTP_TIMEOUT)
-            except asyncio.TimeoutError:
-                s["status"] = "error"
-                s["message"] = "OTP timeout"
-                await cleanup_session(sid)
-                return {"status": "error", "message": "OTP not provided in time"}
-
-            otp_value = s.get("otp_value")
-            if not otp_value:
-                s["status"] = "error"
-                s["message"] = "OTP missing after event"
-                await cleanup_session(sid)
-                return {"status": "error", "message": "OTP missing after event"}
-
-            # Submit OTP - check if it's in a popup window
-            try:
-                driver = s["driver"]
-                wait = WebDriverWait(driver, 30)
-                
-                # Check if there's a popup window and switch to it
-                original_window = driver.current_window_handle
-                all_windows = driver.window_handles
-                if len(all_windows) > 1:
-                    for window in all_windows:
-                        if window != original_window:
-                            driver.switch_to.window(window)
-                            print(f"[OTP] Switched to popup window for OTP entry")
-                            break
-
-                otp_input = wait.until(
-                    EC.presence_of_element_located(
-                        (By.XPATH, "//input[contains(@aria-lable,'Verification code') or contains(@placeholder,'Enter your verification code')]")
-                    )
-                )
-                otp_input.clear()
-                otp_input.send_keys(otp_value)
-
-                try:
-                    submit_btn = wait.until(
-                        EC.element_to_be_clickable(
-                            (By.XPATH, "//button[@type='button' and @aria-label='Verify']")
-                        )
-                    )
-                    submit_btn.click()
-                except Exception:
-                    otp_input.send_keys("\n")
-                
-                # Wait for verification and switch back to main window if needed
-                await asyncio.sleep(2)
-                if len(driver.window_handles) > 0:
-                    driver.switch_to.window(driver.window_handles[0])
-
-                s["status"] = "otp_submitted"
+            
+            driver = s["driver"]
+            
+            # Poll the browser to detect when OTP is completed (user enters it directly)
+            # We check every 1 second for up to SESSION_OTP_TIMEOUT seconds (faster response)
+            max_polls = SESSION_OTP_TIMEOUT
+            login_success = False
+            
+            print(f"[OTP] Waiting for user to enter OTP (polling browser for {SESSION_OTP_TIMEOUT}s)...")
+            
+            for poll in range(max_polls):
+                await asyncio.sleep(1)
                 s["last_activity"] = time.time()
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                s["status"] = "error"
-                s["message"] = f"Failed to submit OTP into page: {e}"
-                await cleanup_session(sid)
-                return {"status": "error", "message": s["message"]}
+                
+                try:
+                    # Check current URL - if we're on member search page, login succeeded
+                    current_url = driver.current_url.lower()
+                    print(f"[OTP Poll {poll+1}/{max_polls}] URL: {current_url[:60]}...")
+                    
+                    # Check if we've navigated away from login/OTP pages
+                    if "member" in current_url or "dashboard" in current_url or "eligibility" in current_url:
+                        # Verify by checking for member search input
+                        try:
+                            member_search = WebDriverWait(driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                            )
+                            print("[OTP] Member search input found - login successful!")
+                            login_success = True
+                            break
+                        except TimeoutException:
+                            print("[OTP] On member page but search input not found, continuing to poll...")
+                    
+                    # Also check if OTP input is still visible
+                    try:
+                        otp_input = driver.find_element(By.XPATH, 
+                            "//input[contains(@aria-label,'Verification') or contains(@placeholder,'verification') or @type='tel']"
+                        )
+                        # OTP input still visible - user hasn't entered OTP yet
+                        print(f"[OTP Poll {poll+1}] OTP input still visible - waiting...")
+                    except:
+                        # OTP input not found - might mean login is in progress or succeeded
+                        # Try navigating to members page
+                        if "onboarding" in current_url or "start" in current_url:
+                            print("[OTP] OTP input gone, trying to navigate to members page...")
+                            try:
+                                driver.get("https://providers.deltadentalma.com/members")
+                                await asyncio.sleep(2)
+                            except:
+                                pass
+                
+                except Exception as poll_err:
+                    print(f"[OTP Poll {poll+1}] Error: {poll_err}")
+            
+            if not login_success:
+                # Final attempt - navigate to members page and check
+                try:
+                    print("[OTP] Final attempt - navigating to members page...")
+                    driver.get("https://providers.deltadentalma.com/members")
+                    await asyncio.sleep(3)
+                    
+                    member_search = WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]'))
+                    )
+                    print("[OTP] Member search input found - login successful!")
+                    login_success = True
+                except TimeoutException:
+                    s["status"] = "error"
+                    s["message"] = "OTP timeout - login not completed"
+                    await cleanup_session(sid)
+                    return {"status": "error", "message": "OTP not completed in time"}
+                except Exception as final_err:
+                    s["status"] = "error"
+                    s["message"] = f"OTP verification failed: {final_err}"
+                    await cleanup_session(sid)
+                    return {"status": "error", "message": s["message"]}
+            
+            if login_success:
+                s["status"] = "running"
+                s["message"] = "Login successful after OTP"
+                print("[OTP] Proceeding to step1...")
 
         elif isinstance(login_result, str) and login_result.startswith("ERROR"):
             s["status"] = "error"
             s["message"] = login_result
             await cleanup_session(sid)
             return {"status": "error", "message": login_result}
+
+        # Login succeeded without OTP (SUCCESS)
+        elif isinstance(login_result, str) and login_result == "SUCCESS":
+            print("[start_ddma_run] Login succeeded without OTP")
+            s["status"] = "running"
+            s["message"] = "Login succeeded"
+            # Continue to step1 below
 
         # Step 1
         step1_result = bot.step1()

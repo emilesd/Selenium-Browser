@@ -179,43 +179,56 @@ async function handleDentaQuestCompletedJob(
     await storage.updatePatient(patient.id, { status: newStatus });
     outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}`;
 
-    // convert screenshot -> pdf if available
+    // Handle PDF or convert screenshot -> pdf if available
     let pdfBuffer: Buffer | null = null;
     let generatedPdfPath: string | null = null;
 
     if (
       seleniumResult &&
       seleniumResult.ss_path &&
-      typeof seleniumResult.ss_path === "string" &&
-      (seleniumResult.ss_path.endsWith(".png") ||
-        seleniumResult.ss_path.endsWith(".jpg") ||
-        seleniumResult.ss_path.endsWith(".jpeg"))
+      typeof seleniumResult.ss_path === "string"
     ) {
       try {
         if (!fsSync.existsSync(seleniumResult.ss_path)) {
           throw new Error(
-            `Screenshot file not found: ${seleniumResult.ss_path}`
+            `File not found: ${seleniumResult.ss_path}`
           );
         }
 
-        pdfBuffer = await imageToPdfBuffer(seleniumResult.ss_path);
+        // Check if the file is already a PDF (from Page.printToPDF)
+        if (seleniumResult.ss_path.endsWith(".pdf")) {
+          // Read PDF directly
+          pdfBuffer = await fs.readFile(seleniumResult.ss_path);
+          generatedPdfPath = seleniumResult.ss_path;
+          seleniumResult.pdf_path = generatedPdfPath;
+          console.log(`[dentaquest-eligibility] Using PDF directly from Selenium: ${generatedPdfPath}`);
+        } else if (
+          seleniumResult.ss_path.endsWith(".png") ||
+          seleniumResult.ss_path.endsWith(".jpg") ||
+          seleniumResult.ss_path.endsWith(".jpeg")
+        ) {
+          // Convert image to PDF
+          pdfBuffer = await imageToPdfBuffer(seleniumResult.ss_path);
 
-        const pdfFileName = `dentaquest_eligibility_${insuranceEligibilityData.memberId}_${Date.now()}.pdf`;
-        generatedPdfPath = path.join(
-          path.dirname(seleniumResult.ss_path),
-          pdfFileName
-        );
-        await fs.writeFile(generatedPdfPath, pdfBuffer);
-
-        // ensure cleanup uses this
-        seleniumResult.pdf_path = generatedPdfPath;
+          const pdfFileName = `dentaquest_eligibility_${insuranceEligibilityData.memberId}_${Date.now()}.pdf`;
+          generatedPdfPath = path.join(
+            path.dirname(seleniumResult.ss_path),
+            pdfFileName
+          );
+          await fs.writeFile(generatedPdfPath, pdfBuffer);
+          seleniumResult.pdf_path = generatedPdfPath;
+          console.log(`[dentaquest-eligibility] Converted screenshot to PDF: ${generatedPdfPath}`);
+        } else {
+          outputResult.pdfUploadStatus =
+            `Unsupported file format: ${seleniumResult.ss_path}`;
+        }
       } catch (err: any) {
-        console.error("Failed to convert screenshot to PDF:", err);
-        outputResult.pdfUploadStatus = `Failed to convert screenshot to PDF: ${String(err)}`;
+        console.error("Failed to process PDF/screenshot:", err);
+        outputResult.pdfUploadStatus = `Failed to process file: ${String(err)}`;
       }
     } else {
       outputResult.pdfUploadStatus =
-        "No valid screenshot (ss_path) provided by Selenium; nothing to upload.";
+        "No valid file path (ss_path) provided by Selenium; nothing to upload.";
     }
 
     if (pdfBuffer && generatedPdfPath) {

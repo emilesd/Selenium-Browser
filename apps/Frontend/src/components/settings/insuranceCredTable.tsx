@@ -13,6 +13,17 @@ type Credential = {
   password: string;
 };
 
+// Map site keys to friendly labels
+const SITE_KEY_LABELS: Record<string, string> = {
+  MH: "MassHealth",
+  DDMA: "Delta Dental MA",
+  DENTAQUEST: "Tufts SCO / DentaQuest",
+};
+
+function getSiteKeyLabel(siteKey: string): string {
+  return SITE_KEY_LABELS[siteKey] || siteKey;
+}
+
 export function CredentialTable() {
   const queryClient = useQueryClient();
 
@@ -108,7 +119,7 @@ export function CredentialTable() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Site Key
+                Provider
               </th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Username
@@ -141,7 +152,7 @@ export function CredentialTable() {
             ) : (
               currentCredentials.map((cred) => (
                 <tr key={cred.id}>
-                  <td className="px-4 py-2">{cred.siteKey}</td>
+                  <td className="px-4 py-2">{getSiteKeyLabel(cred.siteKey)}</td>
                   <td className="px-4 py-2">{cred.username}</td>
                   <td className="px-4 py-2">••••••••</td>
                   <td className="px-4 py-2 text-right">
@@ -227,7 +238,7 @@ export function CredentialTable() {
         isOpen={isDeleteDialogOpen}
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
-        entityName={credentialToDelete?.siteKey}
+        entityName={credentialToDelete ? getSiteKeyLabel(credentialToDelete.siteKey) : undefined}
       />
     </div>
   );
