@@ -391,14 +391,37 @@ class AutomationDeltaDentalMAEligibilityCheck:
                 except:
                     pass
 
-            # 2) Click on patient name to navigate to detailed patient page
-            print("[DDMA step2] Clicking on patient name to open detailed page...")
+            # 2) Extract patient name and click to navigate to detailed patient page
+            print("[DDMA step2] Extracting patient name and finding detail link...")
             patient_name_clicked = False
             patientName = ""
             
             # First, let's print what we see on the page for debugging
             current_url_before = self.driver.current_url
             print(f"[DDMA step2] Current URL before click: {current_url_before}")
+            
+            # Try to extract patient name from the first row of search results
+            # This is more reliable than extracting from link text
+            name_extraction_selectors = [
+                "(//tbody//tr)[1]//td[1]",  # First column of first row (usually name)
+                "(//table//tbody//tr)[1]//td[1]",  # Alternative table structure
+                "//table//tr[2]//td[1]",  # Skip header row
+                "(//tbody//tr)[1]//td[contains(@class,'name')]",  # Name column by class
+                "(//tbody//tr)[1]//a",  # Link in first row (might contain name)
+            ]
+            
+            for selector in name_extraction_selectors:
+                try:
+                    elem = self.driver.find_element(By.XPATH, selector)
+                    text = elem.text.strip()
+                    # Filter out non-name text
+                    if text and len(text) > 1 and len(text) < 100:
+                        if not any(x in text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'date', 'print', 'view', 'details', 'status']):
+                            patientName = text
+                            print(f"[DDMA step2] Extracted patient name from search results: '{patientName}'")
+                            break
+                except Exception:
+                    continue
             
             # Try to find all links in the first row and print them for debugging
             try:
@@ -408,6 +431,11 @@ class AutomationDeltaDentalMAEligibilityCheck:
                     href = link.get_attribute("href") or "no-href"
                     text = link.text.strip() or "(empty text)"
                     print(f"  Link {i}: href={href[:80]}..., text={text}")
+                    # Also try to get name from link if we haven't found it yet
+                    if not patientName and text and len(text) > 1:
+                        if not any(x in text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'view', 'details']):
+                            patientName = text
+                            print(f"[DDMA step2] Got patient name from link text: '{patientName}'")
             except Exception as e:
                 print(f"[DDMA step2] Error listing links: {e}")
             
@@ -424,9 +452,14 @@ class AutomationDeltaDentalMAEligibilityCheck:
                     patient_link = WebDriverWait(self.driver, 5).until(
                         EC.presence_of_element_located((By.XPATH, selector))
                     )
-                    patientName = patient_link.text.strip()
+                    link_text = patient_link.text.strip()
                     href = patient_link.get_attribute("href")
-                    print(f"[DDMA step2] Found patient link: text='{patientName}', href={href}")
+                    print(f"[DDMA step2] Found patient link: text='{link_text}', href={href}")
+                    
+                    # Use link text as name if we don't have one yet
+                    if not patientName and link_text and len(link_text) > 1:
+                        if not any(x in link_text.lower() for x in ['active', 'inactive', 'view', 'details']):
+                            patientName = link_text
                     
                     if href and "member-details" in href:
                         detail_url = href
@@ -507,30 +540,70 @@ class AutomationDeltaDentalMAEligibilityCheck:
                 # Try to extract patient name from detailed page if not already found
                 if not patientName:
                     detail_name_selectors = [
-                        "//h1",
-                        "//h2",
-                        "//*[contains(@class,'patient-name') or contains(@class,'member-name')]",
-                        "//div[contains(@class,'header')]//span",
+                        "//*[contains(@class,'member-name')]",
+                        "//*[contains(@class,'patient-name')]",
+                        "//h1[not(contains(@class,'page-title'))]",
+                        "//h2[not(contains(@class,'section-title'))]",
+                        "//div[contains(@class,'header')]//span[string-length(text()) > 2]",
+                        "//div[contains(@class,'member-info')]//span",
+                        "//div[contains(@class,'patient-info')]//span",
+                        "//span[contains(@class,'name')]",
                     ]
                     for selector in detail_name_selectors:
                         try:
                             name_elem = self.driver.find_element(By.XPATH, selector)
                             name_text = name_elem.text.strip()
-                            if name_text and len(name_text) > 1:
-                                if not any(x in name_text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'date', 'print']):
+                            if name_text and len(name_text) > 2 and len(name_text) < 100:
+                                # Filter out common non-name text
+                                skip_words = ['active', 'inactive', 'eligible', 'search', 'date', 'print', 
+                                             'view', 'details', 'member', 'patient', 'status', 'eligibility',
+                                             'welcome', 'home', 'logout', 'menu', 'close', 'expand']
+                                if not any(x in name_text.lower() for x in skip_words):
                                     patientName = name_text
                                     print(f"[DDMA step2] Found patient name on detail page: {patientName}")
                                     break
                         except:
                             continue
+                
+                # As a last resort, try to find name in page text using patterns
+                if not patientName:
+                    try:
+                        # Look for text that looks like a name (First Last format)
+                        import re
+                        page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                        # Look for "Member Name:" or "Patient Name:" followed by text
+                        name_patterns = [
+                            r'Member Name[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                            r'Patient Name[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                            r'Name[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        ]
+                        for pattern in name_patterns:
+                            match = re.search(pattern, page_text, re.IGNORECASE)
+                            if match:
+                                patientName = match.group(1).strip()
+                                print(f"[DDMA step2] Found patient name via pattern match: {patientName}")
+                                break
+                    except:
+                        pass
             else:
                 print("[DDMA step2] Warning: Could not click on patient, capturing search results page")
                 # Still try to get patient name from search results
-                try:
-                    name_elem = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]//td[1]")
-                    patientName = name_elem.text.strip()
-                except:
-                    pass
+                if not patientName:
+                    name_selectors = [
+                        "(//tbody//tr)[1]//td[1]",  # First column of first row
+                        "(//table//tbody//tr)[1]//td[1]",
+                        "(//tbody//tr)[1]//a",  # Link in first row
+                    ]
+                    for selector in name_selectors:
+                        try:
+                            name_elem = self.driver.find_element(By.XPATH, selector)
+                            text = name_elem.text.strip()
+                            if text and len(text) > 1 and not any(x in text.lower() for x in ['active', 'inactive', 'view', 'details']):
+                                patientName = text
+                                print(f"[DDMA step2] Got patient name from search results: {patientName}")
+                                break
+                        except:
+                            continue
 
             if not patientName:
                 print("[DDMA step2] Could not extract patient name")

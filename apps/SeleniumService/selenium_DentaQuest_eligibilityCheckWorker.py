@@ -285,16 +285,34 @@ class AutomationDentaQuestEligibilityCheck:
                     
                     def replace_with_sendkeys(el, value):
                         el.click()
-                        time.sleep(0.05)
+                        time.sleep(0.1)
+                        # Clear existing content
                         el.send_keys(Keys.CONTROL, "a")
+                        time.sleep(0.05)
                         el.send_keys(Keys.BACKSPACE)
+                        time.sleep(0.05)
+                        # Type new value
                         el.send_keys(value)
+                        time.sleep(0.1)
 
+                    # Fill month
                     replace_with_sendkeys(month_elem, month_val)
+                    # Tab to day field
+                    month_elem.send_keys(Keys.TAB)
                     time.sleep(0.1)
+                    
+                    # Fill day
                     replace_with_sendkeys(day_elem, day_val)
+                    # Tab to year field
+                    day_elem.send_keys(Keys.TAB)
                     time.sleep(0.1)
+                    
+                    # Fill year
                     replace_with_sendkeys(year_elem, year_val)
+                    # Tab out of the field to trigger validation
+                    year_elem.send_keys(Keys.TAB)
+                    time.sleep(0.2)
+                    
                     print(f"[DentaQuest step1] Filled {field_name}: {month_val}/{day_val}/{year_val}")
                     return True
                 except Exception as e:
@@ -303,11 +321,11 @@ class AutomationDentaQuestEligibilityCheck:
 
             # 1. Fill Date of Service with TODAY's date using specific data-testid
             fill_date_by_testid("member-search_date-of-service", service_month, service_day, service_year, "Date of Service")
-            time.sleep(0.3)
+            time.sleep(0.5)
 
             # 2. Fill Date of Birth with patient's DOB using specific data-testid
             fill_date_by_testid("member-search_date-of-birth", dob_month, dob_day, dob_year, "Date of Birth")
-            time.sleep(0.3)
+            time.sleep(0.5)
 
             # 3. Fill Member ID
             member_id_input = wait.until(EC.presence_of_element_located(
@@ -405,6 +423,25 @@ class AutomationDentaQuestEligibilityCheck:
             detail_url = None
             current_url_before = self.driver.current_url
             print(f"[DentaQuest step2] Current URL before: {current_url_before}")
+            
+            # Try to extract patient name from search results first
+            name_extraction_selectors = [
+                "(//tbody//tr)[1]//td[1]",  # First column of first row
+                "(//table//tbody//tr)[1]//td[1]",
+                "//table//tr[2]//td[1]",  # Skip header row
+                "(//tbody//tr)[1]//a",  # Link in first row
+            ]
+            for selector in name_extraction_selectors:
+                try:
+                    elem = self.driver.find_element(By.XPATH, selector)
+                    text = elem.text.strip()
+                    if text and len(text) > 1 and len(text) < 100:
+                        if not any(x in text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'view', 'details', 'status']):
+                            patientName = text
+                            print(f"[DentaQuest step2] Extracted patient name from search results: '{patientName}'")
+                            break
+                except:
+                    continue
             
             # Find all links in first row and log them
             try:

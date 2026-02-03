@@ -10,10 +10,12 @@ import os
 import time
 import helpers_ddma_eligibility as hddma
 import helpers_dentaquest_eligibility as hdentaquest
+import helpers_unitedsco_eligibility as hunitedsco
 
 # Import session clear functions for startup
 from ddma_browser_manager import clear_ddma_session_on_startup
 from dentaquest_browser_manager import clear_dentaquest_session_on_startup
+from unitedsco_browser_manager import clear_unitedsco_session_on_startup
 
 from dotenv import load_dotenv
 load_dotenv() 
@@ -25,6 +27,7 @@ print("SELENIUM AGENT STARTING - CLEARING ALL SESSIONS")
 print("=" * 50)
 clear_ddma_session_on_startup()
 clear_dentaquest_session_on_startup()
+clear_unitedsco_session_on_startup()
 print("=" * 50)
 print("SESSION CLEAR COMPLETE - FRESH LOGINS REQUIRED")
 print("=" * 50)
@@ -275,6 +278,79 @@ async def dentaquest_session_status(sid: str):
     return s
 
 
+# Endpoint:7 - United SCO eligibility (background, OTP)
+
+async def _unitedsco_worker_wrapper(sid: str, data: dict, url: str):
+    """
+    Background worker that:
+      - acquires semaphore (to keep 1 selenium at a time),
+      - updates active/queued counters,
+      - runs the United SCO flow via helpers.start_unitedsco_run.
+    """
+    global active_jobs, waiting_jobs
+    async with semaphore:
+        async with lock:
+            waiting_jobs -= 1
+            active_jobs += 1
+        try:
+            await hunitedsco.start_unitedsco_run(sid, data, url)
+        finally:
+            async with lock:
+                active_jobs -= 1
+
+
+@app.post("/unitedsco-eligibility")
+async def unitedsco_eligibility(request: Request):
+    """
+    Starts a United SCO eligibility session in the background.
+    Body: { "data": { ... }, "url"?: string }
+    Returns: { status: "started", session_id: "<uuid>" }
+    """
+    global waiting_jobs
+
+    body = await request.json()
+    data = body.get("data", {})
+
+    # create session
+    sid = hunitedsco.make_session_entry()
+    hunitedsco.sessions[sid]["type"] = "unitedsco_eligibility"
+    hunitedsco.sessions[sid]["last_activity"] = time.time()
+
+    async with lock:
+        waiting_jobs += 1
+
+    # run in background (queued under semaphore)
+    asyncio.create_task(_unitedsco_worker_wrapper(sid, data, url="https://app.dentalhub.com/app/login"))
+
+    return {"status": "started", "session_id": sid}
+
+
+@app.post("/unitedsco-submit-otp")
+async def unitedsco_submit_otp(request: Request):
+    """
+    Body: { "session_id": "<sid>", "otp": "123456" }
+    Node / frontend call this when user provides OTP for United SCO.
+    """
+    body = await request.json()
+    sid = body.get("session_id")
+    otp = body.get("otp")
+    if not sid or not otp:
+        raise HTTPException(status_code=400, detail="session_id and otp required")
+
+    res = hunitedsco.submit_otp(sid, otp)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+
+@app.get("/unitedsco-session/{sid}/status")
+async def unitedsco_session_status(sid: str):
+    s = hunitedsco.get_session_status(sid)
+    if s.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="session not found")
+    return s
+
+
 @app.post("/submit-otp")
 async def submit_otp(request: Request):
     """
@@ -310,6 +386,44 @@ async def get_status():
             "queued_jobs": waiting_jobs,
             "status": "busy" if active_jobs > 0 or waiting_jobs > 0 else "idle"
         }
+
+
+# ✅ Clear session endpoints - called when credentials are deleted
+@app.post("/clear-ddma-session")
+async def clear_ddma_session():
+    """
+    Clears the DDMA browser session. Called when DDMA credentials are deleted.
+    """
+    try:
+        clear_ddma_session_on_startup()
+        return {"status": "success", "message": "DDMA session cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/clear-dentaquest-session")
+async def clear_dentaquest_session():
+    """
+    Clears the DentaQuest browser session. Called when DentaQuest credentials are deleted.
+    """
+    try:
+        clear_dentaquest_session_on_startup()
+        return {"status": "success", "message": "DentaQuest session cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/clear-unitedsco-session")
+async def clear_unitedsco_session():
+    """
+    Clears the United SCO browser session. Called when United SCO credentials are deleted.
+    """
+    try:
+        clear_unitedsco_session_on_startup()
+        return {"status": "success", "message": "United SCO session cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     host = os.getenv("HOST")

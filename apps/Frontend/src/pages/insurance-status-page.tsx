@@ -29,6 +29,7 @@ import { PdfPreviewModal } from "@/components/insurance-status/pdf-preview-modal
 import { useLocation } from "wouter";
 import { DdmaEligibilityButton } from "@/components/insurance-status/ddma-buton-modal";
 import { DentaQuestEligibilityButton } from "@/components/insurance-status/dentaquest-button-modal";
+import { UnitedSCOEligibilityButton } from "@/components/insurance-status/unitedsco-button-modal";
 
 export default function InsuranceStatusPage() {
   const { user } = useAuth();
@@ -632,14 +633,20 @@ export default function InsuranceStatusPage() {
                   }}
                 />
 
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  disabled={isFormIncomplete}
-                >
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                  United SCO
-                </Button>
+                <UnitedSCOEligibilityButton
+                  memberId={memberId}
+                  dateOfBirth={dateOfBirth}
+                  firstName={firstName}
+                  lastName={lastName}
+                  isFormIncomplete={isFormIncomplete}
+                  onPdfReady={(pdfId, fallbackFilename) => {
+                    setPreviewPdfId(pdfId);
+                    setPreviewFallbackFilename(
+                      fallbackFilename ?? `eligibility_unitedsco_${memberId}.pdf`
+                    );
+                    setPreviewOpen(true);
+                  }}
+                />
 
                 <Button
                   className="w-full"
