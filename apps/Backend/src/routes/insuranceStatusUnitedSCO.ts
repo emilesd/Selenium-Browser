@@ -135,6 +135,7 @@ async function handleUnitedSCOCompletedJob(
   seleniumResult: any
 ) {
   let createdPdfFileId: number | null = null;
+  let generatedPdfPath: string | null = null;
   const outputResult: any = {};
 
   // We'll wrap the processing in try/catch/finally so cleanup always runs
@@ -204,7 +205,6 @@ async function handleUnitedSCOCompletedJob(
 
     // Handle PDF or convert screenshot -> pdf if available
     let pdfBuffer: Buffer | null = null;
-    let generatedPdfPath: string | null = null;
 
     if (
       seleniumResult &&
@@ -233,7 +233,8 @@ async function handleUnitedSCOCompletedJob(
           // Convert image to PDF
           pdfBuffer = await imageToPdfBuffer(seleniumResult.ss_path);
 
-          const pdfFileName = `unitedsco_eligibility_${insuranceEligibilityData.memberId}_${Date.now()}.pdf`;
+          // Use insuranceId (which may come from Selenium result) for filename
+          const pdfFileName = `unitedsco_eligibility_${insuranceId || "unknown"}_${Date.now()}.pdf`;
           generatedPdfPath = path.join(
             path.dirname(seleniumResult.ss_path),
             pdfFileName
@@ -287,18 +288,25 @@ async function handleUnitedSCOCompletedJob(
         "No valid PDF path provided by Selenium, Couldn't upload pdf to server.";
     }
 
+    // Get filename for frontend preview
+    const pdfFilename = generatedPdfPath ? path.basename(generatedPdfPath) : null;
+
     return {
       patientUpdateStatus: outputResult.patientUpdateStatus,
       pdfUploadStatus: outputResult.pdfUploadStatus,
       pdfFileId: createdPdfFileId,
+      pdfFilename,
     };
   } catch (err: any) {
+    // Get filename for frontend preview if available
+    const pdfFilename = generatedPdfPath ? path.basename(generatedPdfPath) : null;
     return {
       patientUpdateStatus: outputResult.patientUpdateStatus,
       pdfUploadStatus:
         outputResult.pdfUploadStatus ??
         `Failed to process United SCO job: ${err?.message ?? String(err)}`,
       pdfFileId: createdPdfFileId,
+      pdfFilename,
       error: err?.message ?? String(err),
     };
   } finally {

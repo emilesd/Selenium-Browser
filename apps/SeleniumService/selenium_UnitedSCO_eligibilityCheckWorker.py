@@ -267,13 +267,9 @@ class AutomationUnitedSCOEligibilityCheck:
         """
         Navigate to Eligibility page and fill the Patient Information form.
         
-        FLEXIBLE INPUT SUPPORT:
-        - If Member ID is provided: Fill Subscriber ID + DOB (+ optional First/Last Name)
-        - If no Member ID but First/Last Name provided: Fill First Name + Last Name + DOB
-        
-        Workflow:
+        Workflow based on actual DOM testing:
         1. Navigate directly to eligibility page
-        2. Fill available fields based on input
+        2. Fill First Name (id='firstName_Back'), Last Name (id='lastName_Back'), DOB (id='dateOfBirth_Back')
         3. Select Payer: "UnitedHealthcare Massachusetts" from ng-select dropdown
         4. Click Continue
         5. Handle Practitioner & Location page - click paymentGroupId dropdown, select Summit Dental Care
@@ -282,17 +278,7 @@ class AutomationUnitedSCOEligibilityCheck:
         from selenium.webdriver.common.action_chains import ActionChains
         
         try:
-            # Determine which input mode to use
-            has_member_id = bool(self.memberId and self.memberId.strip())
-            has_name = bool(self.firstName and self.firstName.strip() and self.lastName and self.lastName.strip())
-            
-            if has_member_id:
-                print(f"[UnitedSCO step1] Using Member ID mode: ID={self.memberId}, DOB={self.dateOfBirth}")
-            elif has_name:
-                print(f"[UnitedSCO step1] Using Name mode: {self.firstName} {self.lastName}, DOB={self.dateOfBirth}")
-            else:
-                print("[UnitedSCO step1] ERROR: Need either Member ID or First Name + Last Name")
-                return "ERROR: Missing required input (Member ID or Name)"
+            print(f"[UnitedSCO step1] Starting eligibility search for: {self.firstName} {self.lastName}, DOB: {self.dateOfBirth}")
             
             # Navigate directly to eligibility page
             print("[UnitedSCO step1] Navigating to eligibility page...")
@@ -305,51 +291,37 @@ class AutomationUnitedSCOEligibilityCheck:
             # Step 1.1: Fill the Patient Information form
             print("[UnitedSCO step1] Filling Patient Information form...")
             
-            # Wait for form to load
+            # Wait for form to load - look for First Name field (id='firstName_Back')
             try:
                 WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "subscriberId_Front"))
+                    EC.presence_of_element_located((By.ID, "firstName_Back"))
                 )
                 print("[UnitedSCO step1] Patient Information form loaded")
             except TimeoutException:
                 print("[UnitedSCO step1] Patient Information form not found")
                 return "ERROR: Patient Information form not found"
             
-            # Fill Subscriber ID if provided (id='subscriberId_Front')
-            if has_member_id:
-                try:
-                    subscriber_id_input = self.driver.find_element(By.ID, "subscriberId_Front")
-                    subscriber_id_input.clear()
-                    subscriber_id_input.send_keys(self.memberId)
-                    print(f"[UnitedSCO step1] Entered Subscriber ID: {self.memberId}")
-                except Exception as e:
-                    print(f"[UnitedSCO step1] Error entering Subscriber ID: {e}")
+            # Fill First Name (id='firstName_Back')
+            try:
+                first_name_input = self.driver.find_element(By.ID, "firstName_Back")
+                first_name_input.clear()
+                first_name_input.send_keys(self.firstName)
+                print(f"[UnitedSCO step1] Entered First Name: {self.firstName}")
+            except Exception as e:
+                print(f"[UnitedSCO step1] Error entering First Name: {e}")
+                return "ERROR: Could not enter First Name"
             
-            # Fill First Name if provided (id='firstName_Back')
-            if self.firstName and self.firstName.strip():
-                try:
-                    first_name_input = self.driver.find_element(By.ID, "firstName_Back")
-                    first_name_input.clear()
-                    first_name_input.send_keys(self.firstName)
-                    print(f"[UnitedSCO step1] Entered First Name: {self.firstName}")
-                except Exception as e:
-                    print(f"[UnitedSCO step1] Error entering First Name: {e}")
-                    if not has_member_id:  # Only fail if we're relying on name
-                        return "ERROR: Could not enter First Name"
+            # Fill Last Name (id='lastName_Back')
+            try:
+                last_name_input = self.driver.find_element(By.ID, "lastName_Back")
+                last_name_input.clear()
+                last_name_input.send_keys(self.lastName)
+                print(f"[UnitedSCO step1] Entered Last Name: {self.lastName}")
+            except Exception as e:
+                print(f"[UnitedSCO step1] Error entering Last Name: {e}")
+                return "ERROR: Could not enter Last Name"
             
-            # Fill Last Name if provided (id='lastName_Back')
-            if self.lastName and self.lastName.strip():
-                try:
-                    last_name_input = self.driver.find_element(By.ID, "lastName_Back")
-                    last_name_input.clear()
-                    last_name_input.send_keys(self.lastName)
-                    print(f"[UnitedSCO step1] Entered Last Name: {self.lastName}")
-                except Exception as e:
-                    print(f"[UnitedSCO step1] Error entering Last Name: {e}")
-                    if not has_member_id:  # Only fail if we're relying on name
-                        return "ERROR: Could not enter Last Name"
-            
-            # Fill Date of Birth (id='dateOfBirth_Back', format: MM/DD/YYYY) - always required
+            # Fill Date of Birth (id='dateOfBirth_Back', format: MM/DD/YYYY)
             try:
                 dob_input = self.driver.find_element(By.ID, "dateOfBirth_Back")
                 dob_input.clear()

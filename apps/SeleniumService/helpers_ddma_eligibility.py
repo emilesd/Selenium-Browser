@@ -147,6 +147,28 @@ async def start_ddma_run(sid: str, data: dict, url: str):
                 s["last_activity"] = time.time()
                 
                 try:
+                    # Check if OTP was submitted via API (from app)
+                    otp_value = s.get("otp_value")
+                    if otp_value:
+                        print(f"[OTP] OTP received from app: {otp_value}")
+                        try:
+                            otp_input = driver.find_element(By.XPATH, 
+                                "//input[contains(@aria-label,'Verification') or contains(@placeholder,'verification') or @type='tel']"
+                            )
+                            otp_input.clear()
+                            otp_input.send_keys(otp_value)
+                            # Click verify button
+                            try:
+                                verify_btn = driver.find_element(By.XPATH, "//button[@type='button' and @aria-label='Verify']")
+                                verify_btn.click()
+                            except:
+                                otp_input.send_keys("\n")  # Press Enter as fallback
+                            print("[OTP] OTP typed and submitted via app")
+                            s["otp_value"] = None  # Clear so we don't submit again
+                            await asyncio.sleep(3)  # Wait for verification
+                        except Exception as type_err:
+                            print(f"[OTP] Failed to type OTP from app: {type_err}")
+                    
                     # Check current URL - if we're on member search page, login succeeded
                     current_url = driver.current_url.lower()
                     print(f"[OTP Poll {poll+1}/{max_polls}] URL: {current_url[:60]}...")

@@ -127,6 +127,11 @@ export function DentaQuestEligibilityButton({
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmittingOtp, setIsSubmittingOtp] = useState(false);
 
+  // DentaQuest allows flexible search - only DOB is required, plus at least one identifier
+  // Can use: memberId, firstName, lastName, or any combination
+  const hasAnyIdentifier = memberId || firstName || lastName;
+  const isDentaQuestFormIncomplete = !dateOfBirth || !hasAnyIdentifier;
+
   // Clean up socket on unmount
   useEffect(() => {
     return () => {
@@ -370,10 +375,13 @@ export function DentaQuestEligibilityButton({
   };
 
   const startDentaQuestEligibility = async () => {
-    if (!memberId || !dateOfBirth) {
+    // Flexible search - DOB required plus at least one identifier
+    const hasAnyIdentifier = memberId || firstName || lastName;
+    
+    if (!dateOfBirth || !hasAnyIdentifier) {
       toast({
         title: "Missing fields",
-        description: "Member ID and Date of Birth are required.",
+        description: "Please provide Date of Birth and at least one of: Member ID, First Name, or Last Name.",
         variant: "destructive",
       });
       return;
@@ -538,7 +546,7 @@ export function DentaQuestEligibilityButton({
       <Button
         className="w-full"
         variant="outline"
-        disabled={isFormIncomplete || isStarting}
+        disabled={isDentaQuestFormIncomplete || isStarting}
         onClick={startDentaQuestEligibility}
       >
         {isStarting ? (

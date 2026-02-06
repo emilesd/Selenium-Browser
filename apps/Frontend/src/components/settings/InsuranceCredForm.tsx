@@ -19,6 +19,7 @@ const SITE_KEY_OPTIONS = [
   { value: "MH", label: "MassHealth" },
   { value: "DDMA", label: "Delta Dental MA" },
   { value: "DENTAQUEST", label: "Tufts SCO / DentaQuest" },
+  { value: "UNITEDSCO", label: "United SCO" },
 ];
 
 export function CredentialForm({ onClose, userId, defaultValues }: CredentialFormProps) {

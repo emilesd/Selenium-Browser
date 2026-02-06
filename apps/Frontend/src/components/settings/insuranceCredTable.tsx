@@ -18,6 +18,7 @@ const SITE_KEY_LABELS: Record<string, string> = {
   MH: "MassHealth",
   DDMA: "Delta Dental MA",
   DENTAQUEST: "Tufts SCO / DentaQuest",
+  UNITEDSCO: "United SCO",
 };
 
 function getSiteKeyLabel(siteKey: string): string {

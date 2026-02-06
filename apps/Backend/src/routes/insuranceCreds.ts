@@ -76,8 +76,33 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
     const id = Number(req.params.id);
     if (isNaN(id)) return res.status(400).send("Invalid credential ID");
 
+    // Get existing credential to know its siteKey
+    const existing = await storage.getInsuranceCredential(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Credential not found" });
+    }
+
     const updates = req.body as Partial<InsuranceCredential>;
     const credential = await storage.updateInsuranceCredential(id, updates);
+
+    // Clear Selenium browser session when credentials are changed
+    const seleniumAgentUrl = process.env.SELENIUM_AGENT_URL || "http://localhost:5002";
+    try {
+      if (existing.siteKey === "DDMA") {
+        await fetch(`${seleniumAgentUrl}/clear-ddma-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared DDMA browser session after credential update");
+      } else if (existing.siteKey === "DENTAQUEST") {
+        await fetch(`${seleniumAgentUrl}/clear-dentaquest-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared DentaQuest browser session after credential update");
+      } else if (existing.siteKey === "UNITEDSCO") {
+        await fetch(`${seleniumAgentUrl}/clear-unitedsco-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared United SCO browser session after credential update");
+      }
+    } catch (seleniumErr) {
+      // Don't fail the update if Selenium session clear fails
+      console.error("[insuranceCreds] Failed to clear Selenium session:", seleniumErr);
+    }
+
     return res.status(200).json(credential);
   } catch (err) {
     return res
@@ -115,6 +140,25 @@ router.delete("/:id", async (req: Request, res: Response): Promise<any> => {
         .status(404)
         .json({ message: "Credential not found or already deleted" });
     }
+
+    // 4) Clear Selenium browser session for this provider
+    const seleniumAgentUrl = process.env.SELENIUM_AGENT_URL || "http://localhost:5002";
+    try {
+      if (existing.siteKey === "DDMA") {
+        await fetch(`${seleniumAgentUrl}/clear-ddma-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared DDMA browser session after credential deletion");
+      } else if (existing.siteKey === "DENTAQUEST") {
+        await fetch(`${seleniumAgentUrl}/clear-dentaquest-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared DentaQuest browser session after credential deletion");
+      } else if (existing.siteKey === "UNITEDSCO") {
+        await fetch(`${seleniumAgentUrl}/clear-unitedsco-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared United SCO browser session after credential deletion");
+      }
+    } catch (seleniumErr) {
+      // Don't fail the delete if Selenium session clear fails
+      console.error("[insuranceCreds] Failed to clear Selenium session:", seleniumErr);
+    }
+
     return res.status(204).send();
   } catch (err) {
     return res

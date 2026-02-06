@@ -3,6 +3,7 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
@@ -22,6 +23,8 @@ class AutomationDentaQuestEligibilityCheck:
         # Flatten values for convenience
         self.memberId = self.data.get("memberId", "")
         self.dateOfBirth = self.data.get("dateOfBirth", "")
+        self.firstName = self.data.get("firstName", "")
+        self.lastName = self.data.get("lastName", "")
         self.dentaquest_username = self.data.get("dentaquestUsername", "")
         self.dentaquest_password = self.data.get("dentaquestPassword", "")
 
@@ -247,11 +250,20 @@ class AutomationDentaQuestEligibilityCheck:
             return f"ERROR:LOGIN FAILED: {e}"
 
     def step1(self):
-        """Navigate to member search and enter member ID + DOB"""
+        """Navigate to member search - fills all available fields (Member ID, First Name, Last Name, DOB)"""
         wait = WebDriverWait(self.driver, 30)
 
         try:
-            print(f"[DentaQuest step1] Starting member search for ID: {self.memberId}, DOB: {self.dateOfBirth}")
+            # Log what fields are available for search
+            fields = []
+            if self.memberId:
+                fields.append(f"ID: {self.memberId}")
+            if self.firstName:
+                fields.append(f"FirstName: {self.firstName}")
+            if self.lastName:
+                fields.append(f"LastName: {self.lastName}")
+            fields.append(f"DOB: {self.dateOfBirth}")
+            print(f"[DentaQuest step1] Starting member search with: {', '.join(fields)}")
             
             # Wait for page to be ready
             time.sleep(2)
@@ -267,14 +279,6 @@ class AutomationDentaQuestEligibilityCheck:
                 print(f"[DentaQuest step1] Error parsing DOB: {e}")
                 return "ERROR: PARSING DOB"
 
-            # Get today's date for Date of Service
-            from datetime import datetime
-            today = datetime.now()
-            service_month = str(today.month).zfill(2)
-            service_day = str(today.day).zfill(2)
-            service_year = str(today.year)
-            print(f"[DentaQuest step1] Service date: {service_month}/{service_day}/{service_year}")
-
             # Helper function to fill contenteditable date spans within a specific container
             def fill_date_by_testid(testid, month_val, day_val, year_val, field_name):
                 try:
@@ -285,55 +289,127 @@ class AutomationDentaQuestEligibilityCheck:
                     
                     def replace_with_sendkeys(el, value):
                         el.click()
-                        time.sleep(0.1)
-                        # Clear existing content
+                        time.sleep(0.05)
                         el.send_keys(Keys.CONTROL, "a")
-                        time.sleep(0.05)
                         el.send_keys(Keys.BACKSPACE)
-                        time.sleep(0.05)
-                        # Type new value
                         el.send_keys(value)
-                        time.sleep(0.1)
 
-                    # Fill month
                     replace_with_sendkeys(month_elem, month_val)
-                    # Tab to day field
-                    month_elem.send_keys(Keys.TAB)
                     time.sleep(0.1)
-                    
-                    # Fill day
                     replace_with_sendkeys(day_elem, day_val)
-                    # Tab to year field
-                    day_elem.send_keys(Keys.TAB)
                     time.sleep(0.1)
-                    
-                    # Fill year
                     replace_with_sendkeys(year_elem, year_val)
-                    # Tab out of the field to trigger validation
-                    year_elem.send_keys(Keys.TAB)
-                    time.sleep(0.2)
-                    
                     print(f"[DentaQuest step1] Filled {field_name}: {month_val}/{day_val}/{year_val}")
                     return True
                 except Exception as e:
                     print(f"[DentaQuest step1] Error filling {field_name}: {e}")
                     return False
 
-            # 1. Fill Date of Service with TODAY's date using specific data-testid
-            fill_date_by_testid("member-search_date-of-service", service_month, service_day, service_year, "Date of Service")
-            time.sleep(0.5)
+            # 1. Select Provider from dropdown (required field)
+            try:
+                print("[DentaQuest step1] Selecting Provider...")
+                # Try to find and click Provider dropdown
+                provider_selectors = [
+                    "//label[contains(text(),'Provider')]/following-sibling::*//div[contains(@class,'select')]",
+                    "//div[contains(@data-testid,'provider')]//div[contains(@class,'select')]",
+                    "//*[@aria-label='Provider']",
+                    "//select[contains(@name,'provider') or contains(@id,'provider')]",
+                    "//div[contains(@class,'provider')]//input",
+                    "//label[contains(text(),'Provider')]/..//div[contains(@class,'control')]"
+                ]
+                
+                provider_clicked = False
+                for selector in provider_selectors:
+                    try:
+                        provider_dropdown = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                        provider_dropdown.click()
+                        print(f"[DentaQuest step1] Clicked provider dropdown with selector: {selector}")
+                        time.sleep(0.5)
+                        provider_clicked = True
+                        break
+                    except TimeoutException:
+                        continue
+                
+                if provider_clicked:
+                    # Select first available provider option
+                    option_selectors = [
+                        "//div[contains(@class,'option') and not(contains(@class,'disabled'))]",
+                        "//li[contains(@class,'option')]",
+                        "//option[not(@disabled)]",
+                        "//*[@role='option']"
+                    ]
+                    
+                    for opt_selector in option_selectors:
+                        try:
+                            options = self.driver.find_elements(By.XPATH, opt_selector)
+                            if options:
+                                # Select first non-placeholder option
+                                for opt in options:
+                                    opt_text = opt.text.strip()
+                                    if opt_text and "select" not in opt_text.lower():
+                                        opt.click()
+                                        print(f"[DentaQuest step1] Selected provider: {opt_text}")
+                                        break
+                                break
+                        except:
+                            continue
+                    
+                    # Close dropdown if still open
+                    ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                    time.sleep(0.3)
+                else:
+                    print("[DentaQuest step1] Warning: Could not find Provider dropdown")
+                    
+            except Exception as e:
+                print(f"[DentaQuest step1] Error selecting provider: {e}")
+            
+            time.sleep(0.3)
 
             # 2. Fill Date of Birth with patient's DOB using specific data-testid
             fill_date_by_testid("member-search_date-of-birth", dob_month, dob_day, dob_year, "Date of Birth")
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-            # 3. Fill Member ID
-            member_id_input = wait.until(EC.presence_of_element_located(
-                (By.XPATH, '//input[@placeholder="Search by member ID"]')
-            ))
-            member_id_input.clear()
-            member_id_input.send_keys(self.memberId)
-            print(f"[DentaQuest step1] Entered member ID: {self.memberId}")
+            # 3. Fill ALL available search fields (flexible search)
+            # Fill Member ID if provided
+            if self.memberId:
+                try:
+                    member_id_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="Search by member ID"]')
+                    ))
+                    member_id_input.clear()
+                    member_id_input.send_keys(self.memberId)
+                    print(f"[DentaQuest step1] Entered member ID: {self.memberId}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DentaQuest step1] Warning: Could not fill member ID: {e}")
+            
+            # Fill First Name if provided
+            if self.firstName:
+                try:
+                    first_name_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="First name - 1 char minimum" or contains(@placeholder,"first name") or contains(@name,"firstName") or contains(@id,"firstName")]')
+                    ))
+                    first_name_input.clear()
+                    first_name_input.send_keys(self.firstName)
+                    print(f"[DentaQuest step1] Entered first name: {self.firstName}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DentaQuest step1] Warning: Could not fill first name: {e}")
+            
+            # Fill Last Name if provided
+            if self.lastName:
+                try:
+                    last_name_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="Last name - 2 char minimum" or contains(@placeholder,"last name") or contains(@name,"lastName") or contains(@id,"lastName")]')
+                    ))
+                    last_name_input.clear()
+                    last_name_input.send_keys(self.lastName)
+                    print(f"[DentaQuest step1] Entered last name: {self.lastName}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DentaQuest step1] Warning: Could not fill last name: {e}")
 
             time.sleep(0.3)
 
@@ -351,7 +427,8 @@ class AutomationDentaQuestEligibilityCheck:
                     search_btn.click()
                     print("[DentaQuest step1] Clicked search button (fallback)")
                 except:
-                    member_id_input.send_keys(Keys.RETURN)
+                    # Press Enter on the last input field
+                    ActionChains(self.driver).send_keys(Keys.RETURN).perform()
                     print("[DentaQuest step1] Pressed Enter to search")
             
             time.sleep(5)
@@ -363,7 +440,7 @@ class AutomationDentaQuestEligibilityCheck:
                 ))
                 if error_msg and error_msg.is_displayed():
                     print("[DentaQuest step1] No results found")
-                    return "ERROR: INVALID MEMBERID OR DOB"
+                    return "ERROR: INVALID SEARCH CRITERIA"
             except TimeoutException:
                 pass
 
@@ -390,8 +467,54 @@ class AutomationDentaQuestEligibilityCheck:
             except TimeoutException:
                 print("[DentaQuest step2] Warning: Results table not found within timeout")
             
-            # 1) Find and extract eligibility status from search results
+            # 1) Find and extract eligibility status and Member ID from search results
             eligibilityText = "unknown"
+            foundMemberId = ""
+            
+            # Try to extract Member ID from the search results
+            import re
+            try:
+                # Look for Member ID in various places
+                member_id_selectors = [
+                    "(//tbody//tr)[1]//td[contains(text(),'ID:') or contains(@data-testid,'member-id')]",
+                    "//span[contains(text(),'Member ID')]/..//span",
+                    "//div[contains(text(),'Member ID')]",
+                    "(//tbody//tr)[1]//td[2]",  # Often Member ID is in second column
+                ]
+                
+                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                
+                # Try regex patterns to find Member ID
+                patterns = [
+                    r'Member ID[:\s]+([A-Z0-9]+)',
+                    r'ID[:\s]+([A-Z0-9]{5,})',
+                    r'MemberID[:\s]+([A-Z0-9]+)',
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, page_text, re.IGNORECASE)
+                    if match:
+                        foundMemberId = match.group(1).strip()
+                        print(f"[DentaQuest step2] Extracted Member ID: {foundMemberId}")
+                        break
+                
+                if not foundMemberId:
+                    for selector in member_id_selectors:
+                        try:
+                            elem = self.driver.find_element(By.XPATH, selector)
+                            text = elem.text.strip()
+                            # Extract just the ID part
+                            id_match = re.search(r'([A-Z0-9]{5,})', text)
+                            if id_match:
+                                foundMemberId = id_match.group(1)
+                                print(f"[DentaQuest step2] Found Member ID via selector: {foundMemberId}")
+                                break
+                        except:
+                            continue
+            except Exception as e:
+                print(f"[DentaQuest step2] Error extracting Member ID: {e}")
+            
+            # Extract eligibility status
             status_selectors = [
                 "(//tbody//tr)[1]//a[contains(@href, 'eligibility')]",
                 "//a[contains(@href,'eligibility')]",
@@ -423,25 +546,6 @@ class AutomationDentaQuestEligibilityCheck:
             detail_url = None
             current_url_before = self.driver.current_url
             print(f"[DentaQuest step2] Current URL before: {current_url_before}")
-            
-            # Try to extract patient name from search results first
-            name_extraction_selectors = [
-                "(//tbody//tr)[1]//td[1]",  # First column of first row
-                "(//table//tbody//tr)[1]//td[1]",
-                "//table//tr[2]//td[1]",  # Skip header row
-                "(//tbody//tr)[1]//a",  # Link in first row
-            ]
-            for selector in name_extraction_selectors:
-                try:
-                    elem = self.driver.find_element(By.XPATH, selector)
-                    text = elem.text.strip()
-                    if text and len(text) > 1 and len(text) < 100:
-                        if not any(x in text.lower() for x in ['active', 'inactive', 'eligible', 'search', 'view', 'details', 'status']):
-                            patientName = text
-                            print(f"[DentaQuest step2] Extracted patient name from search results: '{patientName}'")
-                            break
-                except:
-                    continue
             
             # Find all links in first row and log them
             try:
@@ -619,7 +723,8 @@ class AutomationDentaQuestEligibilityCheck:
                 "eligibility": eligibilityText,
                 "ss_path": pdf_path,  # Keep key as ss_path for backward compatibility
                 "pdf_path": pdf_path,  # Also add explicit pdf_path
-                "patientName": patientName
+                "patientName": patientName,
+                "memberId": foundMemberId  # Member ID extracted from the page
             }
             print(f"[DentaQuest step2] Success: {output}")
             return output

@@ -146,6 +146,36 @@ async def start_dentaquest_run(sid: str, data: dict, url: str):
                 s["last_activity"] = time.time()
                 
                 try:
+                    # Check if OTP was submitted via API (from app)
+                    otp_value = s.get("otp_value")
+                    if otp_value:
+                        print(f"[DentaQuest OTP] OTP received from app: {otp_value}")
+                        try:
+                            otp_input = driver.find_element(By.XPATH, 
+                                "//input[contains(@name,'otp') or contains(@name,'code') or @type='tel' or contains(@aria-label,'Verification') or contains(@placeholder,'code')]"
+                            )
+                            otp_input.clear()
+                            otp_input.send_keys(otp_value)
+                            # Click verify button - use same pattern as Delta MA
+                            try:
+                                verify_btn = driver.find_element(By.XPATH, "//button[@type='button' and @aria-label='Verify']")
+                                verify_btn.click()
+                                print("[DentaQuest OTP] Clicked verify button (aria-label)")
+                            except:
+                                try:
+                                    # Fallback: try other button patterns
+                                    verify_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Verify') or contains(text(),'Submit') or @type='submit']")
+                                    verify_btn.click()
+                                    print("[DentaQuest OTP] Clicked verify button (text/type)")
+                                except:
+                                    otp_input.send_keys("\n")  # Press Enter as fallback
+                                    print("[DentaQuest OTP] Pressed Enter as fallback")
+                            print("[DentaQuest OTP] OTP typed and submitted via app")
+                            s["otp_value"] = None  # Clear so we don't submit again
+                            await asyncio.sleep(3)  # Wait for verification
+                        except Exception as type_err:
+                            print(f"[DentaQuest OTP] Failed to type OTP from app: {type_err}")
+                    
                     # Check current URL - if we're on dashboard/member page, login succeeded
                     current_url = driver.current_url.lower()
                     print(f"[DentaQuest OTP Poll {poll+1}/{max_polls}] URL: {current_url[:60]}...")

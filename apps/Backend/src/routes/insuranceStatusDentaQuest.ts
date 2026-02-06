@@ -136,12 +136,17 @@ async function handleDentaQuestCompletedJob(
 
   // We'll wrap the processing in try/catch/finally so cleanup always runs
   try {
-    // 1) ensuring memberid.
     const insuranceEligibilityData = job.insuranceEligibilityData;
-    const insuranceId = String(insuranceEligibilityData.memberId ?? "").trim();
+    
+    // 1) Get Member ID - prefer the one extracted from the page by Selenium,
+    // since we now allow searching by name only
+    let insuranceId = String(seleniumResult?.memberId ?? "").trim();
     if (!insuranceId) {
-      throw new Error("Missing memberId for DentaQuest job");
+      // Fallback to the one provided in the request
+      insuranceId = String(insuranceEligibilityData.memberId ?? "").trim();
     }
+    
+    console.log(`[dentaquest-eligibility] Insurance ID: ${insuranceId || "(none)"}`);
 
     // 2) Create or update patient (with name from selenium result if available)
     const patientNameFromResult =
@@ -149,23 +154,93 @@ async function handleDentaQuestCompletedJob(
         ? seleniumResult.patientName.trim()
         : null;
 
-    const { firstName, lastName } = splitName(patientNameFromResult);
+    // Get name from request data as fallback
+    let firstName = insuranceEligibilityData.firstName || "";
+    let lastName = insuranceEligibilityData.lastName || "";
+    
+    // Override with name from Selenium result if available
+    if (patientNameFromResult) {
+      const parsedName = splitName(patientNameFromResult);
+      firstName = parsedName.firstName || firstName;
+      lastName = parsedName.lastName || lastName;
+    }
 
-    await createOrUpdatePatientByInsuranceId({
-      insuranceId,
-      firstName,
-      lastName,
-      dob: insuranceEligibilityData.dateOfBirth,
-      userId: job.userId,
-    });
+    // Create or update patient if we have an insurance ID
+    if (insuranceId) {
+      await createOrUpdatePatientByInsuranceId({
+        insuranceId,
+        firstName,
+        lastName,
+        dob: insuranceEligibilityData.dateOfBirth,
+        userId: job.userId,
+      });
+    } else {
+      console.log("[dentaquest-eligibility] No Member ID available - will try to find patient by name/DOB");
+    }
 
     // 3) Update patient status + PDF upload
-    const patient = await storage.getPatientByInsuranceId(
-      insuranceEligibilityData.memberId
-    );
+    // First try to find by insurance ID, then by name + DOB
+    let patient = insuranceId 
+      ? await storage.getPatientByInsuranceId(insuranceId)
+      : null;
+    
+    // If not found by ID and we have name + DOB, try to find by those
+    if (!patient && firstName && lastName) {
+      console.log(`[dentaquest-eligibility] Looking up patient by name: ${firstName} ${lastName}`);
+      const patients = await storage.getPatientsByUserId(job.userId);
+      patient = patients.find(p => 
+        p.firstName?.toLowerCase() === firstName.toLowerCase() &&
+        p.lastName?.toLowerCase() === lastName.toLowerCase()
+      ) || null;
+      
+      // If found and we now have the insurance ID, update the patient record
+      if (patient && insuranceId) {
+        await storage.updatePatient(patient.id, { insuranceId });
+        console.log(`[dentaquest-eligibility] Updated patient ${patient.id} with insuranceId: ${insuranceId}`);
+      }
+    }
+    
+    // If still no patient found, CREATE a new one with the data we have
+    if (!patient?.id && firstName && lastName) {
+      console.log(`[dentaquest-eligibility] Creating new patient: ${firstName} ${lastName}`);
+      
+      const createPayload: any = {
+        firstName,
+        lastName,
+        dateOfBirth: insuranceEligibilityData.dateOfBirth || null,
+        gender: "",
+        phone: "",
+        userId: job.userId,
+        insuranceId: insuranceId || null,
+      };
+      
+      try {
+        const patientData = insertPatientSchema.parse(createPayload);
+        const newPatient = await storage.createPatient(patientData);
+        if (newPatient) {
+          patient = newPatient;
+          console.log(`[dentaquest-eligibility] Created new patient with ID: ${patient.id}`);
+        }
+      } catch (err: any) {
+        // Try without dateOfBirth if it fails
+        try {
+          const safePayload = { ...createPayload };
+          delete safePayload.dateOfBirth;
+          const patientData = insertPatientSchema.parse(safePayload);
+          const newPatient = await storage.createPatient(patientData);
+          if (newPatient) {
+            patient = newPatient;
+            console.log(`[dentaquest-eligibility] Created new patient (no DOB) with ID: ${patient.id}`);
+          }
+        } catch (err2: any) {
+          console.error(`[dentaquest-eligibility] Failed to create patient: ${err2?.message}`);
+        }
+      }
+    }
+    
     if (!patient?.id) {
       outputResult.patientUpdateStatus =
-        "Patient not found; no update performed";
+        "Patient not found and could not be created";
       return {
         patientUpdateStatus: outputResult.patientUpdateStatus,
         pdfUploadStatus: "none",
