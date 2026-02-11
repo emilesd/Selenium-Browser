@@ -41,7 +41,8 @@ function isOriginAllowed(origin?: string | null) {
     // Dev mode: allow localhost origins automatically
     if (
       origin.startsWith("http://localhost") ||
-      origin.startsWith("http://127.0.0.1")
+      origin.startsWith("http://127.0.0.1") ||
+      origin.startsWith("http://192.168.0.238")
     )
       return true;
     // allow explicit FRONTEND_URLS if provided

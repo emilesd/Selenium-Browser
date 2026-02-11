@@ -111,6 +111,26 @@ class DDMABrowserManager:
                 except Exception as e:
                     print(f"[DDMA BrowserManager] Could not clear IndexedDB: {e}")
             
+            # Clear browser cache (prevents corrupted cached responses)
+            cache_dirs = [
+                os.path.join(self.profile_dir, "Default", "Cache"),
+                os.path.join(self.profile_dir, "Default", "Code Cache"),
+                os.path.join(self.profile_dir, "Default", "GPUCache"),
+                os.path.join(self.profile_dir, "Default", "Service Worker"),
+                os.path.join(self.profile_dir, "Cache"),
+                os.path.join(self.profile_dir, "Code Cache"),
+                os.path.join(self.profile_dir, "GPUCache"),
+                os.path.join(self.profile_dir, "Service Worker"),
+                os.path.join(self.profile_dir, "ShaderCache"),
+            ]
+            for cache_dir in cache_dirs:
+                if os.path.exists(cache_dir):
+                    try:
+                        shutil.rmtree(cache_dir)
+                        print(f"[DDMA BrowserManager] Cleared {os.path.basename(cache_dir)}")
+                    except Exception as e:
+                        print(f"[DDMA BrowserManager] Could not clear {os.path.basename(cache_dir)}: {e}")
+            
             # Set flag to clear session via JavaScript after browser opens
             self._needs_session_clear = True
             
@@ -235,6 +255,12 @@ class DDMABrowserManager:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         
+        # Anti-detection options (prevent bot detection)
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        options.add_argument("--disable-infobars")
+        
         prefs = {
             "download.default_directory": self.download_dir,
             "plugins.always_open_pdf_externally": True,
@@ -246,6 +272,12 @@ class DDMABrowserManager:
         service = Service(ChromeDriverManager().install())
         self._driver = webdriver.Chrome(service=service, options=options)
         self._driver.maximize_window()
+        
+        # Remove webdriver property to avoid detection
+        try:
+            self._driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        except Exception:
+            pass
         
         # Reset the session clear flag (file-based clearing is done on startup)
         self._needs_session_clear = False

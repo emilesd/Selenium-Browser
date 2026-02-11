@@ -136,36 +136,135 @@ async function handleDdmaCompletedJob(
 
   // We'll wrap the processing in try/catch/finally so cleanup always runs
   try {
-    // 1) ensuring memberid.
     const insuranceEligibilityData = job.insuranceEligibilityData;
-    const insuranceId = String(insuranceEligibilityData.memberId ?? "").trim();
+    
+    // DEBUG: Log the raw selenium result
+    console.log(`[ddma-eligibility] === DEBUG: Raw seleniumResult ===`);
+    console.log(`[ddma-eligibility] seleniumResult.patientName: '${seleniumResult?.patientName}'`);
+    console.log(`[ddma-eligibility] seleniumResult.memberId: '${seleniumResult?.memberId}'`);
+    console.log(`[ddma-eligibility] seleniumResult.status: '${seleniumResult?.status}'`);
+    
+    // 1) Get insuranceId - prefer from Selenium result (flexible search support)
+    let insuranceId = String(seleniumResult?.memberId || "").trim();
     if (!insuranceId) {
-      throw new Error("Missing memberId for ddma job");
+      insuranceId = String(insuranceEligibilityData.memberId ?? "").trim();
     }
+    console.log(`[ddma-eligibility] Resolved insuranceId: ${insuranceId || "(none)"}`);
 
-    // 2) Create or update patient (with name from selenium result if available)
+    // 2) Get patient name - prefer from Selenium result
     const patientNameFromResult =
       typeof seleniumResult?.patientName === "string"
         ? seleniumResult.patientName.trim()
         : null;
+    
+    console.log(`[ddma-eligibility] patientNameFromResult: '${patientNameFromResult}'`);
 
-    const { firstName, lastName } = splitName(patientNameFromResult);
+    // Get name from input data as fallback
+    let firstName = String(insuranceEligibilityData.firstName || "").trim();
+    let lastName = String(insuranceEligibilityData.lastName || "").trim();
+    
+    // Override with name from Selenium result if available
+    if (patientNameFromResult) {
+      const parsedName = splitName(patientNameFromResult);
+      console.log(`[ddma-eligibility] splitName result: firstName='${parsedName.firstName}', lastName='${parsedName.lastName}'`);
+      if (parsedName.firstName) firstName = parsedName.firstName;
+      if (parsedName.lastName) lastName = parsedName.lastName;
+    }
+    console.log(`[ddma-eligibility] Resolved name: firstName='${firstName}', lastName='${lastName}'`);
 
-    await createOrUpdatePatientByInsuranceId({
-      insuranceId,
-      firstName,
-      lastName,
-      dob: insuranceEligibilityData.dateOfBirth,
-      userId: job.userId,
-    });
-
-    // 3) Update patient status + PDF upload
-    const patient = await storage.getPatientByInsuranceId(
-      insuranceEligibilityData.memberId
-    );
+    // 3) Find or create patient
+    let patient: any = null;
+    
+    // First, try to find by insuranceId if available
+    if (insuranceId) {
+      patient = await storage.getPatientByInsuranceId(insuranceId);
+      if (patient) {
+        console.log(`[ddma-eligibility] Found patient by insuranceId: ${patient.id}`);
+        
+        // Update name if we have better data
+        const updates: any = {};
+        if (firstName && String(patient.firstName ?? "").trim() !== firstName) {
+          updates.firstName = firstName;
+        }
+        if (lastName && String(patient.lastName ?? "").trim() !== lastName) {
+          updates.lastName = lastName;
+        }
+        if (Object.keys(updates).length > 0) {
+          await storage.updatePatient(patient.id, updates);
+          console.log(`[ddma-eligibility] Updated patient name to: ${firstName} ${lastName}`);
+        }
+      }
+    }
+    
+    // If not found by ID, try to find by name
+    if (!patient && firstName && lastName) {
+      try {
+        console.log(`[ddma-eligibility] Looking up patient by name: ${firstName} ${lastName}`);
+        const patients = await storage.getPatientsByUserId(job.userId);
+        patient = patients.find(
+          (p: any) =>
+            String(p.firstName ?? "").toLowerCase() === firstName.toLowerCase() &&
+            String(p.lastName ?? "").toLowerCase() === lastName.toLowerCase()
+        ) || null;
+        if (patient) {
+          console.log(`[ddma-eligibility] Found patient by name: ${patient.id}`);
+          // Update insuranceId if we have it
+          if (insuranceId && String(patient.insuranceId ?? "").trim() !== insuranceId) {
+            await storage.updatePatient(patient.id, { insuranceId });
+            console.log(`[ddma-eligibility] Updated patient insuranceId to: ${insuranceId}`);
+          }
+        }
+      } catch (err: any) {
+        console.log(`[ddma-eligibility] Error finding patient by name: ${err.message}`);
+      }
+    }
+    
+    // Determine eligibility status from Selenium result
+    const eligibilityStatus = seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
+    console.log(`[ddma-eligibility] Eligibility status from Delta MA: ${eligibilityStatus}`);
+    
+    // If still not found, create new patient
+    console.log(`[ddma-eligibility] Patient creation check: patient=${patient?.id || 'null'}, firstName='${firstName}', lastName='${lastName}'`);
+    if (!patient && firstName && lastName) {
+      console.log(`[ddma-eligibility] Creating new patient: ${firstName} ${lastName} with status: ${eligibilityStatus}`);
+      try {
+        let parsedDob: Date | undefined = undefined;
+        if (insuranceEligibilityData.dateOfBirth) {
+          try {
+            parsedDob = new Date(insuranceEligibilityData.dateOfBirth);
+            if (isNaN(parsedDob.getTime())) parsedDob = undefined;
+          } catch {
+            parsedDob = undefined;
+          }
+        }
+        
+        const newPatientData: InsertPatient = {
+          firstName,
+          lastName,
+          dateOfBirth: parsedDob || new Date(), // Required field
+          insuranceId: insuranceId || undefined,
+          insuranceProvider: "Delta MA", // Set insurance provider
+          gender: "Unknown", // Required field - default value
+          phone: "", // Required field - default empty
+          userId: job.userId, // Required field
+          status: eligibilityStatus, // Set status from eligibility check
+        };
+        
+        const validation = insertPatientSchema.safeParse(newPatientData);
+        if (validation.success) {
+          patient = await storage.createPatient(validation.data);
+          console.log(`[ddma-eligibility] Created new patient: ${patient.id} with status: ${eligibilityStatus}`);
+        } else {
+          console.log(`[ddma-eligibility] Patient validation failed: ${validation.error.message}`);
+        }
+      } catch (createErr: any) {
+        console.log(`[ddma-eligibility] Failed to create patient: ${createErr.message}`);
+      }
+    }
+    
     if (!patient?.id) {
       outputResult.patientUpdateStatus =
-        "Patient not found; no update performed";
+        "Patient not found and could not be created; no update performed";
       return {
         patientUpdateStatus: outputResult.patientUpdateStatus,
         pdfUploadStatus: "none",
@@ -173,11 +272,10 @@ async function handleDdmaCompletedJob(
       };
     }
 
-    // update patient status.
-    const newStatus =
-      seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
-    await storage.updatePatient(patient.id, { status: newStatus });
-    outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}`;
+    // Update patient status from Delta MA eligibility result
+    await storage.updatePatient(patient.id, { status: eligibilityStatus });
+    outputResult.patientUpdateStatus = `Patient ${patient.id} status set to ${eligibilityStatus} (Delta MA eligibility: ${seleniumResult.eligibility})`;
+    console.log(`[ddma-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF or convert screenshot -> pdf if available
     let pdfBuffer: Buffer | null = null;

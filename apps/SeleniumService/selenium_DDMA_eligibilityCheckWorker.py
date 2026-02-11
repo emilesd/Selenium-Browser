@@ -23,6 +23,8 @@ class AutomationDeltaDentalMAEligibilityCheck:
         # Flatten values for convenience
         self.memberId = self.data.get("memberId", "")
         self.dateOfBirth = self.data.get("dateOfBirth", "")
+        self.firstName = self.data.get("firstName", "")
+        self.lastName = self.data.get("lastName", "")
         self.massddma_username = self.data.get("massddmaUsername", "")
         self.massddma_password = self.data.get("massddmaPassword", "")
 
@@ -284,58 +286,105 @@ class AutomationDeltaDentalMAEligibilityCheck:
             return f"ERROR:LOGIN FAILED: {e}"
 
     def step1(self):
+        """Fill search form with all available fields (flexible search)"""
         wait = WebDriverWait(self.driver, 30)
 
         try:
-            # Fill Member ID
-            member_id_input = wait.until(EC.presence_of_element_located((By.XPATH, '//input[@placeholder="Search by member ID"]')))
-            member_id_input.clear()
-            member_id_input.send_keys(self.memberId)
+            # Log what fields are available
+            fields = []
+            if self.memberId:
+                fields.append(f"ID: {self.memberId}")
+            if self.firstName:
+                fields.append(f"FirstName: {self.firstName}")
+            if self.lastName:
+                fields.append(f"LastName: {self.lastName}")
+            if self.dateOfBirth:
+                fields.append(f"DOB: {self.dateOfBirth}")
+            print(f"[DDMA step1] Starting search with: {', '.join(fields)}")
 
-            # Fill DOB parts
-            try:
-                dob_parts = self.dateOfBirth.split("-")
-                year = dob_parts[0]           # "1964"
-                month = dob_parts[1].zfill(2) # "04"
-                day = dob_parts[2].zfill(2)   # "17"
-            except Exception as e:
-                print(f"Error parsing DOB: {e}")
-                return "ERROR: PARSING DOB"
-
-             # 1) locate the specific member DOB container
-            dob_container = wait.until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//div[@data-testid='member-search_date-of-birth']")
-                )
-            )
-
-            # 2) find the editable spans *inside that container* using relative XPaths
-            month_elem = dob_container.find_element(By.XPATH, ".//span[@data-type='month' and @contenteditable='true']")
-            day_elem   = dob_container.find_element(By.XPATH, ".//span[@data-type='day'   and @contenteditable='true']")
-            year_elem  = dob_container.find_element(By.XPATH, ".//span[@data-type='year'  and @contenteditable='true']")
-
-            # Helper to click, select-all and type (pure send_keys approach)
+            # Helper to click, select-all and type
             def replace_with_sendkeys(el, value):
-                # focus (same as click)
                 el.click()
-                # select all (Ctrl+A) and delete (some apps pick up BACKSPACE better — we use BACKSPACE after select)
                 el.send_keys(Keys.CONTROL, "a")
                 el.send_keys(Keys.BACKSPACE)
-                # type the value
                 el.send_keys(value)
-                # optionally blur or tab out if app expects it
-                # el.send_keys(Keys.TAB)
 
-            replace_with_sendkeys(month_elem, month)
-            time.sleep(0.05)
-            replace_with_sendkeys(day_elem, day)
-            time.sleep(0.05)
-            replace_with_sendkeys(year_elem, year)
+            # 1. Fill Member ID if provided
+            if self.memberId:
+                try:
+                    member_id_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="Search by member ID"]')
+                    ))
+                    member_id_input.clear()
+                    member_id_input.send_keys(self.memberId)
+                    print(f"[DDMA step1] Entered Member ID: {self.memberId}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DDMA step1] Warning: Could not fill Member ID: {e}")
 
+            # 2. Fill DOB if provided
+            if self.dateOfBirth:
+                try:
+                    dob_parts = self.dateOfBirth.split("-")
+                    year = dob_parts[0]
+                    month = dob_parts[1].zfill(2)
+                    day = dob_parts[2].zfill(2)
 
-            # Click Continue button
-            continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[@data-testid="member-search_search-button"]')))
+                    dob_container = wait.until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, "//div[@data-testid='member-search_date-of-birth']")
+                        )
+                    )
+
+                    month_elem = dob_container.find_element(By.XPATH, ".//span[@data-type='month' and @contenteditable='true']")
+                    day_elem = dob_container.find_element(By.XPATH, ".//span[@data-type='day' and @contenteditable='true']")
+                    year_elem = dob_container.find_element(By.XPATH, ".//span[@data-type='year' and @contenteditable='true']")
+
+                    replace_with_sendkeys(month_elem, month)
+                    time.sleep(0.05)
+                    replace_with_sendkeys(day_elem, day)
+                    time.sleep(0.05)
+                    replace_with_sendkeys(year_elem, year)
+                    print(f"[DDMA step1] Filled DOB: {month}/{day}/{year}")
+                except Exception as e:
+                    print(f"[DDMA step1] Warning: Could not fill DOB: {e}")
+
+            # 3. Fill First Name if provided
+            if self.firstName:
+                try:
+                    first_name_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="First name - 1 char minimum" or contains(@placeholder,"first name") or contains(@name,"firstName")]')
+                    ))
+                    first_name_input.clear()
+                    first_name_input.send_keys(self.firstName)
+                    print(f"[DDMA step1] Entered First Name: {self.firstName}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DDMA step1] Warning: Could not fill First Name: {e}")
+
+            # 4. Fill Last Name if provided
+            if self.lastName:
+                try:
+                    last_name_input = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//input[@placeholder="Last name - 2 char minimum" or contains(@placeholder,"last name") or contains(@name,"lastName")]')
+                    ))
+                    last_name_input.clear()
+                    last_name_input.send_keys(self.lastName)
+                    print(f"[DDMA step1] Entered Last Name: {self.lastName}")
+                    time.sleep(0.2)
+                except Exception as e:
+                    print(f"[DDMA step1] Warning: Could not fill Last Name: {e}")
+
+            time.sleep(0.3)
+
+            # Click Search button
+            continue_btn = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, '//button[@data-testid="member-search_search-button"]')
+            ))
             continue_btn.click()
+            print("[DDMA step1] Clicked Search button")
+            
+            time.sleep(5)
             
             # Check for error message
             try:
@@ -343,23 +392,24 @@ class AutomationDeltaDentalMAEligibilityCheck:
                     (By.XPATH, '//div[@data-testid="member-search-result-no-results"]')
                 ))
                 if error_msg:
-                    print("Error: Invalid Member ID or Date of Birth.")
-                    return  "ERROR: INVALID MEMBERID OR DOB"
+                    print("[DDMA step1] Error: No results found")
+                    return "ERROR: INVALID SEARCH CRITERIA"
             except TimeoutException:
                 pass
 
+            print("[DDMA step1] Search completed successfully")
             return "Success"
 
         except Exception as e: 
-            print(f"Error while step1 i.e Cheking the MemberId and DOB in: {e}")
-            return "ERROR:STEP1"
+            print(f"[DDMA step1] Exception: {e}")
+            return f"ERROR:STEP1 - {e}"
 
     
     def step2(self):
         wait = WebDriverWait(self.driver, 90)
 
         try:
-            # Wait for results table to load (use explicit wait instead of fixed sleep)
+            # Wait for results table to load
             try:
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.XPATH, "//tbody//tr"))
@@ -367,10 +417,50 @@ class AutomationDeltaDentalMAEligibilityCheck:
             except TimeoutException:
                 print("[DDMA step2] Warning: Results table not found within timeout")
             
-            # 1) Find and extract eligibility status from search results (use short timeout - not critical)
+            # 1) Extract eligibility status and Member ID from search results
             eligibilityText = "unknown"
+            foundMemberId = ""
+            patientName = ""
+            
+            # Extract data from first row
+            import re
             try:
-                # Use short timeout (3s) since this is just for status extraction
+                first_row = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]")
+                row_text = first_row.text.strip()
+                print(f"[DDMA step2] First row text: {row_text[:150]}...")
+                
+                if row_text:
+                    lines = row_text.split('\n')
+                    
+                    # Extract patient name (first line, before "DOB:")
+                    if lines:
+                        potential_name = lines[0].strip()
+                        # Remove DOB if included in the name
+                        potential_name = re.sub(r'\s*DOB[:\s]*\d{1,2}/\d{1,2}/\d{2,4}\s*', '', potential_name, flags=re.IGNORECASE).strip()
+                        if potential_name and not potential_name.startswith('DOB') and not potential_name.isdigit():
+                            patientName = potential_name
+                            print(f"[DDMA step2] Extracted patient name from row: '{patientName}'")
+                    
+                    # Extract Member ID (usually a numeric/alphanumeric ID on its own line)
+                    for line in lines:
+                        line = line.strip()
+                        if line and re.match(r'^[A-Z0-9]{5,}$', line) and not line.startswith('DOB'):
+                            foundMemberId = line
+                            print(f"[DDMA step2] Extracted Member ID from row: {foundMemberId}")
+                            break
+                    
+                    # Fallback: use input memberId if not found
+                    if not foundMemberId and self.memberId:
+                        foundMemberId = self.memberId
+                        print(f"[DDMA step2] Using input Member ID: {foundMemberId}")
+                        
+            except Exception as e:
+                print(f"[DDMA step2] Error extracting data from row: {e}")
+                if self.memberId:
+                    foundMemberId = self.memberId
+            
+            # Extract eligibility status
+            try:
                 short_wait = WebDriverWait(self.driver, 3)
                 status_link = short_wait.until(EC.presence_of_element_located((
                     By.XPATH,
@@ -394,7 +484,7 @@ class AutomationDeltaDentalMAEligibilityCheck:
             # 2) Click on patient name to navigate to detailed patient page
             print("[DDMA step2] Clicking on patient name to open detailed page...")
             patient_name_clicked = False
-            patientName = ""
+            # Note: Don't reset patientName here - preserve the name extracted from row above
             
             # First, let's print what we see on the page for debugging
             current_url_before = self.driver.current_url
@@ -424,9 +514,13 @@ class AutomationDeltaDentalMAEligibilityCheck:
                     patient_link = WebDriverWait(self.driver, 5).until(
                         EC.presence_of_element_located((By.XPATH, selector))
                     )
-                    patientName = patient_link.text.strip()
+                    link_text = patient_link.text.strip()
                     href = patient_link.get_attribute("href")
-                    print(f"[DDMA step2] Found patient link: text='{patientName}', href={href}")
+                    print(f"[DDMA step2] Found patient link: text='{link_text}', href={href}")
+                    
+                    # Only update patientName if link has text (preserve previously extracted name)
+                    if link_text and not patientName:
+                        patientName = link_text
                     
                     if href and "member-details" in href:
                         detail_url = href
@@ -525,12 +619,13 @@ class AutomationDeltaDentalMAEligibilityCheck:
                             continue
             else:
                 print("[DDMA step2] Warning: Could not click on patient, capturing search results page")
-                # Still try to get patient name from search results
-                try:
-                    name_elem = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]//td[1]")
-                    patientName = name_elem.text.strip()
-                except:
-                    pass
+                # Still try to get patient name from search results if not already found
+                if not patientName:
+                    try:
+                        name_elem = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]//td[1]")
+                        patientName = name_elem.text.strip()
+                    except:
+                        pass
 
             if not patientName:
                 print("[DDMA step2] Could not extract patient name")
@@ -566,7 +661,9 @@ class AutomationDeltaDentalMAEligibilityCheck:
             
             result = self.driver.execute_cdp_cmd("Page.printToPDF", pdf_options)
             pdf_data = base64.b64decode(result.get('data', ''))
-            pdf_path = os.path.join(self.download_dir, f"eligibility_{self.memberId}.pdf")
+            # Use foundMemberId for filename if available, otherwise fall back to input memberId
+            pdf_id = foundMemberId or self.memberId or "unknown"
+            pdf_path = os.path.join(self.download_dir, f"eligibility_{pdf_id}.pdf")
             with open(pdf_path, "wb") as f:
                 f.write(pdf_data)
 
@@ -580,12 +677,23 @@ class AutomationDeltaDentalMAEligibilityCheck:
             except Exception as e:
                 print(f"[step2] Error closing browser: {e}")
             
+            # Clean patient name - remove DOB if it was included (already cleaned above but double check)
+            if patientName:
+                # Remove "DOB: MM/DD/YYYY" or similar patterns from the name
+                cleaned_name = re.sub(r'\s*DOB[:\s]*\d{1,2}/\d{1,2}/\d{2,4}\s*', '', patientName, flags=re.IGNORECASE).strip()
+                if cleaned_name:
+                    patientName = cleaned_name
+                    print(f"[DDMA step2] Cleaned patient name: {patientName}")
+            
+            print(f"[DDMA step2] Final data - PatientName: '{patientName}', MemberID: '{foundMemberId}'")
+            
             output = {
                     "status": "success",
                     "eligibility": eligibilityText,
                     "ss_path": pdf_path,  # Keep key as ss_path for backward compatibility
                     "pdf_path": pdf_path,  # Also add explicit pdf_path
-                    "patientName": patientName
+                    "patientName": patientName,
+                    "memberId": foundMemberId  # Include extracted Member ID
                 }
             return output
         except Exception as e:

@@ -471,48 +471,35 @@ class AutomationDentaQuestEligibilityCheck:
             eligibilityText = "unknown"
             foundMemberId = ""
             
-            # Try to extract Member ID from the search results
+            # Try to extract Member ID from the first row of search results
+            # Row format: "NAME\nDOB: MM/DD/YYYY\nMEMBER_ID\n..."
             import re
             try:
-                # Look for Member ID in various places
-                member_id_selectors = [
-                    "(//tbody//tr)[1]//td[contains(text(),'ID:') or contains(@data-testid,'member-id')]",
-                    "//span[contains(text(),'Member ID')]/..//span",
-                    "//div[contains(text(),'Member ID')]",
-                    "(//tbody//tr)[1]//td[2]",  # Often Member ID is in second column
-                ]
+                first_row = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]")
+                row_text = first_row.text.strip()
                 
-                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                if row_text:
+                    lines = row_text.split('\n')
+                    # Member ID is typically the 3rd line (index 2) - a pure number
+                    for line in lines:
+                        line = line.strip()
+                        # Member ID is usually a number, could be alphanumeric
+                        # It should be after DOB line and be mostly digits
+                        if line and re.match(r'^[A-Z0-9]{5,}$', line) and not line.startswith('DOB'):
+                            foundMemberId = line
+                            print(f"[DentaQuest step2] Extracted Member ID from row: {foundMemberId}")
+                            break
                 
-                # Try regex patterns to find Member ID
-                patterns = [
-                    r'Member ID[:\s]+([A-Z0-9]+)',
-                    r'ID[:\s]+([A-Z0-9]{5,})',
-                    r'MemberID[:\s]+([A-Z0-9]+)',
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, page_text, re.IGNORECASE)
-                    if match:
-                        foundMemberId = match.group(1).strip()
-                        print(f"[DentaQuest step2] Extracted Member ID: {foundMemberId}")
-                        break
-                
-                if not foundMemberId:
-                    for selector in member_id_selectors:
-                        try:
-                            elem = self.driver.find_element(By.XPATH, selector)
-                            text = elem.text.strip()
-                            # Extract just the ID part
-                            id_match = re.search(r'([A-Z0-9]{5,})', text)
-                            if id_match:
-                                foundMemberId = id_match.group(1)
-                                print(f"[DentaQuest step2] Found Member ID via selector: {foundMemberId}")
-                                break
-                        except:
-                            continue
+                # Fallback: if we have self.memberId from input, use that
+                if not foundMemberId and self.memberId:
+                    foundMemberId = self.memberId
+                    print(f"[DentaQuest step2] Using input Member ID: {foundMemberId}")
+                    
             except Exception as e:
                 print(f"[DentaQuest step2] Error extracting Member ID: {e}")
+                # Fallback to input memberId
+                if self.memberId:
+                    foundMemberId = self.memberId
             
             # Extract eligibility status
             status_selectors = [
@@ -558,21 +545,45 @@ class AutomationDentaQuestEligibilityCheck:
             except Exception as e:
                 print(f"[DentaQuest step2] Error listing links: {e}")
             
-            # Find the patient detail link
+            # Find the patient detail link and extract patient name from row
             patient_link_selectors = [
                 "(//table//tbody//tr)[1]//td[1]//a",  # First column link
                 "(//tbody//tr)[1]//a[contains(@href, 'member-details')]",  # member-details link
                 "(//tbody//tr)[1]//a[contains(@href, 'member')]",  # Any member link
             ]
             
+            # First, try to extract patient name from the row text (not the link)
+            try:
+                first_row = self.driver.find_element(By.XPATH, "(//tbody//tr)[1]")
+                row_text = first_row.text.strip()
+                print(f"[DentaQuest step2] First row text: {row_text[:100]}...")
+                
+                # The name is typically the first line, before "DOB:"
+                if row_text:
+                    lines = row_text.split('\n')
+                    if lines:
+                        # First line is usually the patient name
+                        potential_name = lines[0].strip()
+                        # Make sure it's not a date or ID
+                        if potential_name and not potential_name.startswith('DOB') and not potential_name.isdigit():
+                            patientName = potential_name
+                            print(f"[DentaQuest step2] Extracted patient name from row: '{patientName}'")
+            except Exception as e:
+                print(f"[DentaQuest step2] Error extracting name from row: {e}")
+            
+            # Now find the detail link
             for selector in patient_link_selectors:
                 try:
                     patient_link = WebDriverWait(self.driver, 5).until(
                         EC.presence_of_element_located((By.XPATH, selector))
                     )
-                    patientName = patient_link.text.strip()
+                    link_text = patient_link.text.strip()
                     href = patient_link.get_attribute("href")
-                    print(f"[DentaQuest step2] Found patient link: text='{patientName}', href={href}")
+                    print(f"[DentaQuest step2] Found patient link: text='{link_text}', href={href}")
+                    
+                    # If link has text and we don't have patientName yet, use it
+                    if link_text and not patientName:
+                        patientName = link_text
                     
                     if href and ("member-details" in href or "member" in href):
                         detail_url = href

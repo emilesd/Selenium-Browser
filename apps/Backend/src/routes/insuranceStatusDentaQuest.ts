@@ -200,9 +200,13 @@ async function handleDentaQuestCompletedJob(
       }
     }
     
+    // Determine eligibility status from Selenium result
+    const eligibilityStatus = seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
+    console.log(`[dentaquest-eligibility] Eligibility status from DentaQuest: ${eligibilityStatus}`);
+    
     // If still no patient found, CREATE a new one with the data we have
     if (!patient?.id && firstName && lastName) {
-      console.log(`[dentaquest-eligibility] Creating new patient: ${firstName} ${lastName}`);
+      console.log(`[dentaquest-eligibility] Creating new patient: ${firstName} ${lastName} with status: ${eligibilityStatus}`);
       
       const createPayload: any = {
         firstName,
@@ -212,6 +216,8 @@ async function handleDentaQuestCompletedJob(
         phone: "",
         userId: job.userId,
         insuranceId: insuranceId || null,
+        insuranceProvider: "DentaQuest", // Set insurance provider
+        status: eligibilityStatus, // Set status from eligibility check
       };
       
       try {
@@ -219,7 +225,7 @@ async function handleDentaQuestCompletedJob(
         const newPatient = await storage.createPatient(patientData);
         if (newPatient) {
           patient = newPatient;
-          console.log(`[dentaquest-eligibility] Created new patient with ID: ${patient.id}`);
+          console.log(`[dentaquest-eligibility] Created new patient with ID: ${patient.id}, status: ${eligibilityStatus}`);
         }
       } catch (err: any) {
         // Try without dateOfBirth if it fails
@@ -230,7 +236,7 @@ async function handleDentaQuestCompletedJob(
           const newPatient = await storage.createPatient(patientData);
           if (newPatient) {
             patient = newPatient;
-            console.log(`[dentaquest-eligibility] Created new patient (no DOB) with ID: ${patient.id}`);
+            console.log(`[dentaquest-eligibility] Created new patient (no DOB) with ID: ${patient.id}, status: ${eligibilityStatus}`);
           }
         } catch (err2: any) {
           console.error(`[dentaquest-eligibility] Failed to create patient: ${err2?.message}`);
@@ -248,11 +254,10 @@ async function handleDentaQuestCompletedJob(
       };
     }
 
-    // update patient status.
-    const newStatus =
-      seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
-    await storage.updatePatient(patient.id, { status: newStatus });
-    outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}`;
+    // Update patient status from DentaQuest eligibility result
+    await storage.updatePatient(patient.id, { status: eligibilityStatus });
+    outputResult.patientUpdateStatus = `Patient ${patient.id} status set to ${eligibilityStatus} (DentaQuest eligibility: ${seleniumResult.eligibility})`;
+    console.log(`[dentaquest-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF or convert screenshot -> pdf if available
     let pdfBuffer: Buffer | null = null;

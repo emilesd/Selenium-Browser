@@ -119,6 +119,10 @@ export function DdmaEligibilityButton({
   const { toast } = useToast();
   const dispatch = useAppDispatch();
 
+  // Flexible validation: require DOB + at least one identifier (memberId OR firstName OR lastName)
+  const isDdmaFormIncomplete =
+    !dateOfBirth || (!memberId && !firstName && !lastName);
+
   const socketRef = useRef<Socket | null>(null);
   const connectingRef = useRef<Promise<void> | null>(null);
 
@@ -371,10 +375,11 @@ export function DdmaEligibilityButton({
   };
 
   const startDdmaEligibility = async () => {
-    if (!memberId || !dateOfBirth) {
+    // Flexible validation: require DOB + at least one identifier
+    if (!dateOfBirth || (!memberId && !firstName && !lastName)) {
       toast({
         title: "Missing fields",
-        description: "Member ID and Date of Birth are required.",
+        description: "Date of Birth and at least one identifier (Member ID, First Name, or Last Name) are required.",
         variant: "destructive",
       });
       return;
@@ -539,7 +544,7 @@ export function DdmaEligibilityButton({
       <Button
         className="w-full"
         variant="default"
-        disabled={isFormIncomplete || isStarting}
+        disabled={isDdmaFormIncomplete || isStarting}
         onClick={startDdmaEligibility}
       >
         {isStarting ? (
