@@ -73,8 +73,9 @@ async function createOrUpdatePatientByInsuranceId(options: {
   lastName?: string | null;
   dob?: string | Date | null;
   userId: number;
+  eligibilityStatus?: string; // "ACTIVE" or "INACTIVE"
 }) {
-  const { insuranceId, firstName, lastName, dob, userId } = options;
+  const { insuranceId, firstName, lastName, dob, userId, eligibilityStatus } = options;
   if (!insuranceId) throw new Error("Missing insuranceId");
 
   const incomingFirst = (firstName || "").trim();
@@ -101,14 +102,17 @@ async function createOrUpdatePatientByInsuranceId(options: {
     }
     return;
   } else {
+    console.log(`[unitedsco-eligibility] Creating new patient: ${incomingFirst} ${incomingLast} with status: ${eligibilityStatus || "UNKNOWN"}`);
     const createPayload: any = {
       firstName: incomingFirst,
       lastName: incomingLast,
       dateOfBirth: dob,
-      gender: "",
+      gender: "Unknown",
       phone: "",
       userId,
       insuranceId,
+      insuranceProvider: "United SCO",
+      status: eligibilityStatus || "UNKNOWN",
     };
     let patientData: InsertPatient;
     try {
@@ -118,7 +122,8 @@ async function createOrUpdatePatientByInsuranceId(options: {
       delete (safePayload as any).dateOfBirth;
       patientData = insertPatientSchema.parse(safePayload);
     }
-    await storage.createPatient(patientData);
+    const newPatient = await storage.createPatient(patientData);
+    console.log(`[unitedsco-eligibility] Created new patient: ${newPatient.id} with status: ${eligibilityStatus || "UNKNOWN"}`);
   }
 }
 
@@ -171,6 +176,10 @@ async function handleUnitedSCOCompletedJob(
       lastName = parsedName.lastName || lastName;
     }
 
+    // Determine eligibility status from Selenium result
+    const eligibilityStatus = seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
+    console.log(`[unitedsco-eligibility] Eligibility status from United SCO: ${eligibilityStatus}`);
+    
     // 3) Create or update patient
     if (insuranceId) {
       await createOrUpdatePatientByInsuranceId({
@@ -179,6 +188,7 @@ async function handleUnitedSCOCompletedJob(
         lastName,
         dob: insuranceEligibilityData.dateOfBirth,
         userId: job.userId,
+        eligibilityStatus,
       });
     }
 
@@ -187,9 +197,61 @@ async function handleUnitedSCOCompletedJob(
       ? await storage.getPatientByInsuranceId(insuranceId)
       : null;
     
+    // If no patient found by insuranceId, try to find by firstName + lastName
+    if (!patient?.id && firstName && lastName) {
+      const patients = await storage.getAllPatients(job.userId);
+      patient = patients.find(
+        (p) =>
+          p.firstName?.toLowerCase() === firstName.toLowerCase() &&
+          p.lastName?.toLowerCase() === lastName.toLowerCase()
+      ) ?? null;
+      if (patient) {
+        console.log(`[unitedsco-eligibility] Found patient by name: ${patient.id}`);
+      }
+    }
+    
+    // If still not found, create new patient
+    console.log(`[unitedsco-eligibility] Patient creation check: patient=${patient?.id || 'null'}, firstName='${firstName}', lastName='${lastName}'`);
+    if (!patient && firstName && lastName) {
+      console.log(`[unitedsco-eligibility] Creating new patient: ${firstName} ${lastName} with status: ${eligibilityStatus}`);
+      try {
+        let parsedDob: Date | undefined = undefined;
+        if (insuranceEligibilityData.dateOfBirth) {
+          try {
+            parsedDob = new Date(insuranceEligibilityData.dateOfBirth);
+            if (isNaN(parsedDob.getTime())) parsedDob = undefined;
+          } catch {
+            parsedDob = undefined;
+          }
+        }
+        
+        const newPatientData: InsertPatient = {
+          firstName,
+          lastName,
+          dateOfBirth: parsedDob || new Date(), // Required field
+          insuranceId: insuranceId || undefined,
+          insuranceProvider: "United SCO",
+          gender: "Unknown",
+          phone: "",
+          userId: job.userId,
+          status: eligibilityStatus,
+        };
+        
+        const validation = insertPatientSchema.safeParse(newPatientData);
+        if (validation.success) {
+          patient = await storage.createPatient(validation.data);
+          console.log(`[unitedsco-eligibility] Created new patient: ${patient.id} with status: ${eligibilityStatus}`);
+        } else {
+          console.log(`[unitedsco-eligibility] Patient validation failed: ${validation.error.message}`);
+        }
+      } catch (createErr: any) {
+        console.log(`[unitedsco-eligibility] Failed to create patient: ${createErr.message}`);
+      }
+    }
+    
     if (!patient?.id) {
       outputResult.patientUpdateStatus =
-        "Patient not found; no update performed";
+        "Patient not found and could not be created; no update performed";
       return {
         patientUpdateStatus: outputResult.patientUpdateStatus,
         pdfUploadStatus: "none",
@@ -197,11 +259,20 @@ async function handleUnitedSCOCompletedJob(
       };
     }
 
-    // Update patient status
-    const newStatus =
-      seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
-    await storage.updatePatient(patient.id, { status: newStatus });
-    outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}`;
+    // Update patient status and name from United SCO eligibility result
+    const updatePayload: Record<string, any> = { status: eligibilityStatus };
+    
+    // Also update first/last name if we extracted them and patient has empty names
+    if (firstName && (!patient.firstName || patient.firstName.trim() === "")) {
+      updatePayload.firstName = firstName;
+    }
+    if (lastName && (!patient.lastName || patient.lastName.trim() === "")) {
+      updatePayload.lastName = lastName;
+    }
+    
+    await storage.updatePatient(patient.id, updatePayload);
+    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, name=${firstName} ${lastName} (United SCO eligibility: ${seleniumResult.eligibility})`;
+    console.log(`[unitedsco-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF or convert screenshot -> pdf if available
     let pdfBuffer: Buffer | null = null;

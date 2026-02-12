@@ -118,6 +118,10 @@ export function UnitedSCOEligibilityButton({
 }: UnitedSCOEligibilityButtonProps) {
   const { toast } = useToast();
   const dispatch = useAppDispatch();
+  
+  // Flexible validation: require DOB + at least one identifier (memberId OR firstName OR lastName)
+  const isUnitedSCOFormIncomplete =
+    !dateOfBirth || (!memberId && !firstName && !lastName);
 
   const socketRef = useRef<Socket | null>(null);
   const connectingRef = useRef<Promise<void> | null>(null);
@@ -370,10 +374,20 @@ export function UnitedSCOEligibilityButton({
   };
 
   const startUnitedSCOEligibility = async () => {
-    if (!memberId || !dateOfBirth) {
+    // Flexible: require DOB + at least one identifier (memberId OR firstName OR lastName)
+    if (!dateOfBirth) {
       toast({
         title: "Missing fields",
-        description: "Member ID and Date of Birth are required.",
+        description: "Date of Birth is required for United SCO eligibility.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    if (!memberId && !firstName && !lastName) {
+      toast({
+        title: "Missing fields",
+        description: "Member ID, First Name, or Last Name is required for United SCO eligibility.",
         variant: "destructive",
       });
       return;
@@ -382,11 +396,11 @@ export function UnitedSCOEligibilityButton({
     const formattedDob = dateOfBirth ? formatLocalDate(dateOfBirth) : "";
 
     const payload = {
-      memberId,
+      memberId: memberId || "",
       dateOfBirth: formattedDob,
-      firstName,
-      lastName,
-      insuranceSiteKey: "UNITEDSCO", // for backend credential lookup (uses DENTAQUEST)
+      firstName: firstName || "",
+      lastName: lastName || "",
+      insuranceSiteKey: "UNITEDSCO",
     };
 
     try {
@@ -538,7 +552,7 @@ export function UnitedSCOEligibilityButton({
       <Button
         className="w-full"
         variant="outline"
-        disabled={isFormIncomplete || isStarting}
+        disabled={isUnitedSCOFormIncomplete || isStarting}
         onClick={startUnitedSCOEligibility}
       >
         {isStarting ? (

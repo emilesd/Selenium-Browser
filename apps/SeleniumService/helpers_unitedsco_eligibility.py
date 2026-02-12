@@ -73,6 +73,32 @@ async def _remove_session_later(sid: str, delay: int = 20):
     await cleanup_session(sid)
 
 
+def _minimize_browser(bot):
+    """Hide the browser window so it doesn't stay in the user's way."""
+    try:
+        if bot and bot.driver:
+            # Navigate to blank page first
+            try:
+                bot.driver.get("about:blank")
+            except Exception:
+                pass
+            # Try minimize
+            try:
+                bot.driver.minimize_window()
+                print("[UnitedSCO] Browser minimized after error")
+                return
+            except Exception:
+                pass
+            # Fallback: move off-screen
+            try:
+                bot.driver.set_window_position(-10000, -10000)
+                print("[UnitedSCO] Browser moved off-screen after error")
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[UnitedSCO] Could not hide browser: {e}")
+
+
 async def start_unitedsco_run(sid: str, data: dict, url: str):
     """
     Run the United SCO workflow for a session (WITHOUT managing semaphore/counters).
@@ -266,7 +292,11 @@ async def start_unitedsco_run(sid: str, data: dict, url: str):
         if isinstance(step1_result, str) and step1_result.startswith("ERROR"):
             s["status"] = "error"
             s["message"] = step1_result
-            await cleanup_session(sid)
+            s["result"] = {"status": "error", "message": step1_result}
+            # Minimize browser on error
+            _minimize_browser(bot)
+            # Keep session alive for backend to poll, then clean up
+            asyncio.create_task(_remove_session_later(sid, 30))
             return {"status": "error", "message": step1_result}
 
         # Step 2 (PDF)
@@ -283,13 +313,24 @@ async def start_unitedsco_run(sid: str, data: dict, url: str):
                 s["message"] = step2_result.get("message", "unknown error")
             else:
                 s["message"] = str(step2_result)
-            await cleanup_session(sid)
+            s["result"] = {"status": "error", "message": s["message"]}
+            # Minimize browser on error
+            _minimize_browser(bot)
+            # Keep session alive for backend to poll, then clean up
+            asyncio.create_task(_remove_session_later(sid, 30))
             return {"status": "error", "message": s["message"]}
 
     except Exception as e:
         s["status"] = "error"
         s["message"] = f"worker exception: {e}"
-        await cleanup_session(sid)
+        # Minimize browser on exception
+        try:
+            if bot and bot.driver:
+                bot.driver.minimize_window()
+        except Exception:
+            pass
+        s["result"] = {"status": "error", "message": s["message"]}
+        asyncio.create_task(_remove_session_later(sid, 30))
         return {"status": "error", "message": s["message"]}
 
 
@@ -319,5 +360,5 @@ def get_session_status(sid: str) -> Dict[str, Any]:
         "message": s.get("message"),
         "created_at": s.get("created_at"),
         "last_activity": s.get("last_activity"),
-        "result": s.get("result") if s.get("status") == "completed" else None,
+        "result": s.get("result") if s.get("status") in ("completed", "error") else None,
     }
