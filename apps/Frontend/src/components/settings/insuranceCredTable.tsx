@@ -17,6 +17,7 @@ type Credential = {
 const SITE_KEY_LABELS: Record<string, string> = {
   MH: "MassHealth",
   DDMA: "Delta Dental MA",
+  DELTAINS: "Delta Dental Ins",
   DENTAQUEST: "Tufts SCO / DentaQuest",
   UNITEDSCO: "United SCO",
 };

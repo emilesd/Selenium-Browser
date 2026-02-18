@@ -11,11 +11,13 @@ import time
 import helpers_ddma_eligibility as hddma
 import helpers_dentaquest_eligibility as hdentaquest
 import helpers_unitedsco_eligibility as hunitedsco
+import helpers_deltains_eligibility as hdeltains
 
 # Import session clear functions for startup
 from ddma_browser_manager import clear_ddma_session_on_startup
 from dentaquest_browser_manager import clear_dentaquest_session_on_startup
 from unitedsco_browser_manager import clear_unitedsco_session_on_startup
+from deltains_browser_manager import clear_deltains_session_on_startup
 
 from dotenv import load_dotenv
 load_dotenv() 
@@ -28,6 +30,7 @@ print("=" * 50)
 clear_ddma_session_on_startup()
 clear_dentaquest_session_on_startup()
 clear_unitedsco_session_on_startup()
+clear_deltains_session_on_startup()
 print("=" * 50)
 print("SESSION CLEAR COMPLETE - FRESH LOGINS REQUIRED")
 print("=" * 50)
@@ -351,6 +354,77 @@ async def unitedsco_session_status(sid: str):
     return s
 
 
+# Endpoint:8 - DeltaIns eligibility (background, OTP)
+
+async def _deltains_worker_wrapper(sid: str, data: dict, url: str):
+    """
+    Background worker that:
+      - acquires semaphore (to keep 1 selenium at a time),
+      - updates active/queued counters,
+      - runs the DeltaIns flow via helpers.start_deltains_run.
+    """
+    global active_jobs, waiting_jobs
+    async with semaphore:
+        async with lock:
+            waiting_jobs -= 1
+            active_jobs += 1
+        try:
+            await hdeltains.start_deltains_run(sid, data, url)
+        finally:
+            async with lock:
+                active_jobs -= 1
+
+
+@app.post("/deltains-eligibility")
+async def deltains_eligibility(request: Request):
+    """
+    Starts a DeltaIns eligibility session in the background.
+    Body: { "data": { ... }, "url"?: string }
+    Returns: { status: "started", session_id: "<uuid>" }
+    """
+    global waiting_jobs
+
+    body = await request.json()
+    data = body.get("data", {})
+
+    sid = hdeltains.make_session_entry()
+    hdeltains.sessions[sid]["type"] = "deltains_eligibility"
+    hdeltains.sessions[sid]["last_activity"] = time.time()
+
+    async with lock:
+        waiting_jobs += 1
+
+    asyncio.create_task(_deltains_worker_wrapper(sid, data, url="https://www.deltadentalins.com/ciam/login?TARGET=%2Fprovider-tools%2Fv2"))
+
+    return {"status": "started", "session_id": sid}
+
+
+@app.post("/deltains-submit-otp")
+async def deltains_submit_otp(request: Request):
+    """
+    Body: { "session_id": "<sid>", "otp": "123456" }
+    Node / frontend call this when user provides OTP for DeltaIns.
+    """
+    body = await request.json()
+    sid = body.get("session_id")
+    otp = body.get("otp")
+    if not sid or not otp:
+        raise HTTPException(status_code=400, detail="session_id and otp required")
+
+    res = hdeltains.submit_otp(sid, otp)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+
+@app.get("/deltains-session/{sid}/status")
+async def deltains_session_status(sid: str):
+    s = hdeltains.get_session_status(sid)
+    if s.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="session not found")
+    return s
+
+
 @app.post("/submit-otp")
 async def submit_otp(request: Request):
     """
@@ -421,6 +495,18 @@ async def clear_unitedsco_session():
     try:
         clear_unitedsco_session_on_startup()
         return {"status": "success", "message": "United SCO session cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/clear-deltains-session")
+async def clear_deltains_session():
+    """
+    Clears the Delta Dental Ins browser session. Called when DeltaIns credentials are deleted.
+    """
+    try:
+        clear_deltains_session_on_startup()
+        return {"status": "success", "message": "DeltaIns session cleared"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

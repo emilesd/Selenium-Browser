@@ -97,6 +97,9 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
       } else if (existing.siteKey === "UNITEDSCO") {
         await fetch(`${seleniumAgentUrl}/clear-unitedsco-session`, { method: "POST" });
         console.log("[insuranceCreds] Cleared United SCO browser session after credential update");
+      } else if (existing.siteKey === "DELTAINS") {
+        await fetch(`${seleniumAgentUrl}/clear-deltains-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared Delta Dental Ins browser session after credential update");
       }
     } catch (seleniumErr) {
       // Don't fail the update if Selenium session clear fails
@@ -153,6 +156,9 @@ router.delete("/:id", async (req: Request, res: Response): Promise<any> => {
       } else if (existing.siteKey === "UNITEDSCO") {
         await fetch(`${seleniumAgentUrl}/clear-unitedsco-session`, { method: "POST" });
         console.log("[insuranceCreds] Cleared United SCO browser session after credential deletion");
+      } else if (existing.siteKey === "DELTAINS") {
+        await fetch(`${seleniumAgentUrl}/clear-deltains-session`, { method: "POST" });
+        console.log("[insuranceCreds] Cleared Delta Dental Ins browser session after credential deletion");
       }
     } catch (seleniumErr) {
       // Don't fail the delete if Selenium session clear fails

@@ -10,6 +10,17 @@ export default defineConfig(({ mode }) => {
     server: {
       host: env.HOST,
       port: Number(env.PORT),
+      proxy: {
+        "/api": {
+          target: env.VITE_API_BASE_URL_BACKEND || "http://localhost:5000",
+          changeOrigin: true,
+        },
+        "/socket.io": {
+          target: env.VITE_API_BASE_URL_BACKEND || "http://localhost:5000",
+          changeOrigin: true,
+          ws: true,
+        },
+      },
     },
     resolve: {
       alias: {
